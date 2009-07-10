@@ -279,8 +279,7 @@ class GMM(object):
             raise ValueError, 'weights must sum to 1.0'
         
         self._log_weights = np.log(np.array(weights).copy())
-        self._log_weights[np.isinf(self._log_weights)] = ZEROLOGPROB
-                          
+        #self._log_weights[np.isinf(self._log_weights)] = ZEROLOGPROB
 
     @property
     def means(self):
@@ -401,7 +400,7 @@ class GMM(object):
             obs[x] = sample_gaussian(self._means[c], cv, self._cvtype)[:]
         return obs
 
-    def init(self, obs, iter=10, params='wmc'):
+    def init(self, obs, params='wmc', **kwargs):
         """Initialize GMM parameters from data using the k-means algorithm
 
         Parameters
@@ -409,15 +408,20 @@ class GMM(object):
         obs : array_like, shape (n, ndim)
             List of ndim-dimensional data points.  Each row corresponds to a
             single data point.
-        iter : int
-            Number of k-means iterations to perform.
         params : string
             Controls which parameters are updated in the training
             process.  Can contain any combination of 'w' for weights,
             'm' for means, and 'c' for covars.  Defaults to 'wmc'.
+        **kwargs :
+            Keyword arguments to pass into the k-means function 
+            (scipy.cluster.vq.kmeans2)
+
+        See Also
+        --------
+        scipy.cluster.vq.kmeans2
         """
         if 'm' in params:
-            self._means,labels = sp.cluster.vq.kmeans2(obs, self._nmix, iter=5)
+            self._means,labels = sp.cluster.vq.kmeans2(obs, self._nmix, **kwargs)
         if 'w' in params:
             self.weights = np.tile(1.0 / self._nmix, self._nmix)
         if 'c' in params:

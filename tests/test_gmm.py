@@ -315,7 +315,34 @@ class TestGMM(unittest.TestCase):
         self._test_rvs('full')
 
     def _test_train(self, cvtype):
-        pass
+        g = gmm.GMM(self.nmix, self.ndim, cvtype)
+        g.weights = self.weights
+        g.means = self.means
+        g.covars = 20*self.covars[cvtype]
+
+        # Create a training and testing set by sampling from the same
+        # distribution.
+        train_obs = g.rvs(n=200)
+        test_obs = g.rvs(n=20)
+
+        g.init(train_obs, minit='points')
+        init_testll = g.eval(test_obs)[0].sum()
+
+        trainll = g.train(train_obs)
+        self.assert_(np.all(np.diff(trainll) > -1))
+
+        post_testll = g.eval(test_obs)[0].sum()
+        self.assertTrue(post_testll > init_testll)
+
+    def test_train_spherical(self):
+        self._test_train('spherical')
+    def test_train_tied(self):
+        self._test_train('tied')
+    def test_train_diag(self):
+        self._test_train('diag')
+    def test_train_full(self):
+        self._test_train('full')
+        
 
 if __name__ == '__main__':
     unittest.main()
