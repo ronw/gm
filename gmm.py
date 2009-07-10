@@ -514,9 +514,8 @@ class GMM(object):
         # above needs to be transposed.
         avg_obs2 = np.dot(posteriors.T, obs * obs) * norm
         avg_means2 = self._means**2
-        #avg_obs_means = self._means * avg_obs * norm
-        #return avg_obs2 - 2 * avg_obs_means + avg_means2 + min_covar
-        return avg_obs2 - self._means**2 + min_covar
+        avg_obs_means = self._means * avg_obs * norm
+        return avg_obs2 - 2 * avg_obs_means + avg_means2 + min_covar
 
     def _covar_mstep_spherical(self, *args):
         return self._covar_mstep_diag(*args).mean(axis=1)
@@ -550,33 +549,27 @@ class GMM(object):
     def _covar_mstep_slow(self, obs, posteriors, avg_obs, norm, min_covar,
                           cvtype):
         w = posteriors.sum(axis=0)
-        norm = np.tile(1.0 / w[:,np.newaxis], (1, self._ndim))
-        avg_obs = np.dot(posteriors.T, obs)
-
-        self.weights = w / w.sum()
-        self._means = avg_obs * norm
-
-        mu = self._means
-        covars = self.covars.copy()
-        covars[:] = 0
+        covars = np.zeros(self.covars.shape)
         for c in xrange(self._nmix):
-            cv = min_covar * np.eye(self._ndim)
-            for t in xrange(len(obs)):
-                cv += posteriors[t,c] * (
-                    np.dot(obs[t,np.newaxis].T, obs[np.newaxis,t])
-                    #-2 * np.dot(obs[t,np.newaxis].T, mu[np.newaxis,c])
-                    #+ np.dot(mu[c,np.newaxis].T, mu[np.newaxis,c]))
-                    - np.dot(mu[c,np.newaxis].T, mu[np.newaxis,c]))
-            cv /= w[c]
+            mu = self._means[np.newaxis,c]
+            #cv = np.dot(mu.T, mu)
+            avg_obs2 = np.zeros((self._ndim, self._ndim))
+            for t,o in enumerate(obs):
+                avg_obs2 += posteriors[t,c] * np.dot(o[np.newaxis,:].T,
+                                                     o[np.newaxis,:])
+            cv = (avg_obs2 / w[c]
+                  - 2 * np.dot(avg_obs[np.newaxis,c].T / w[c], mu)
+                  + np.dot(mu.T, mu)
+                  + min_covar * np.eye(self._ndim))
 
             if cvtype == 'spherical':
-                covars[c] = np.diag(cv).mean(axis=1) + min_covar
+                covars[c] = np.diag(cv).mean()
             elif cvtype == 'diag':
-                covars[c] = np.diag(cv) + min_covar
+                covars[c] = np.diag(cv)
             elif cvtype == 'full':
-                covars[c] = cv + min_covar * np.eye(self._ndim)
+                covars[c] = cv
             elif cvtype == 'tied':
-                covars += cv / self._nmix + min_covar * np.eye(self._ndim)
+                covars += cv / self._nmix
         return covars
 
 
