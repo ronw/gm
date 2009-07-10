@@ -8,7 +8,6 @@ import scipy.stats
 
 import gmm
 
-
 def _generate_random_spd_matrix(ndim):
     """Return a random symmetric, positive-definite matrix."""
     A = np.random.rand(ndim, ndim)
@@ -242,6 +241,8 @@ class TestGMM(unittest.TestCase):
 
         g.weights = self.weights
         assert_array_almost_equal(g.weights, self.weights)
+        self.assertRaises(ValueError, g.__setattr__, 'weights',
+                          2 * self.weights)
         self.assertRaises(ValueError, g.__setattr__, 'weights', [])
         self.assertRaises(ValueError, g.__setattr__, 'weights',
                           np.zeros((self.nstates - 2, self.ndim)))

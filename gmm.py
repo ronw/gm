@@ -6,9 +6,9 @@ import matplotlib.pyplot as plt
 import scipy as sp
 import scipy.cluster
 
-from generative_model import generative_model
+from generative_model import GenerativeModel
 
-#ZEROLOGPROB = -1e9
+ZEROLOGPROB = -1e200
 
 def almost_equal(actual, desired, decimal=7):
     return abs(desired - actual) < 0.5 * 10**(-decimal)
@@ -108,7 +108,7 @@ def sample_gaussian(mean, covar, cvtype='diag', n=1):
     return (rand.T + mean).T
 
 
-class GMM(generative_model):
+class GMM(GenerativeModel):
     """Gaussian Mixture Model
 
     Representation of a Gaussian mixture model probability distribution.
@@ -281,7 +281,7 @@ class GMM(generative_model):
                             - np.tile(logprob[:,np.newaxis], (1, self._nstates)))
         return logprob, posteriors
 
-    def logprob(self, obs):
+    def lpdf(self, obs):
         """Compute the log probability under the model.
 
         Parameters
