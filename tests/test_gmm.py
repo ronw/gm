@@ -117,12 +117,12 @@ class TestLmvnpdf(unittest.TestCase):
                 lpr[o,c] = np.log(sp.stats.norm.pdf(currobs, mu, std)).sum()
         return lpr
 
-    def _test_lmvnpdfdiag(self, ndim, nmix, nobs=100):
+    def _test_lmvnpdfdiag(self, ndim, nstates, nobs=100):
         # test the slow and naive implementation of lmvnpdf and
         # compare it to the vectorized version (gmm.lmvnpdf) to test
         # for correctness
-        mu = np.random.randint(10) * np.random.rand(nmix, ndim)
-        cv = (np.random.rand(nmix, ndim) + 1.0)**2
+        mu = np.random.randint(10) * np.random.rand(nstates, ndim)
+        cv = (np.random.rand(nstates, ndim) + 1.0)**2
         obs = np.random.randint(10) * np.random.rand(nobs, ndim)
 
         reference = self._slow_lmvnpdfdiag(obs, mu, cv)
@@ -138,9 +138,9 @@ class TestLmvnpdf(unittest.TestCase):
     def test_lmvnpdfdiag(self):
         self._test_lmvnpdfdiag(5, 10)
 
-    def _test_lmvnpdfspherical(self, ndim, nmix, nobs=100):
-        mu = np.random.randint(10) * np.random.rand(nmix, ndim)
-        spherecv = np.random.rand(nmix, 1)**2 + 1
+    def _test_lmvnpdfspherical(self, ndim, nstates, nobs=100):
+        mu = np.random.randint(10) * np.random.rand(nstates, ndim)
+        spherecv = np.random.rand(nstates, 1)**2 + 1
         obs = np.random.randint(10) * np.random.rand(nobs, ndim)
 
         cv = np.tile(spherecv, (ndim, 1))
@@ -157,9 +157,9 @@ class TestLmvnpdf(unittest.TestCase):
     def test_lmvnpdfspherical(self):
         self._test_lmvnpdfspherical(5, 10)
 
-    def _test_lmvnpdffull_with_diagonal_covariance(self, ndim, nmix, nobs=100):
-        mu = np.random.randint(10) * np.random.rand(nmix, ndim)
-        cv = (np.random.rand(nmix, ndim) + 1.0)**2
+    def _test_lmvnpdffull_with_diagonal_covariance(self, ndim, nstates, nobs=100):
+        mu = np.random.randint(10) * np.random.rand(nstates, ndim)
+        cv = (np.random.rand(nstates, ndim) + 1.0)**2
         obs = np.random.randint(10) * np.random.rand(nobs, ndim)
 
         fullcv = np.array([np.diag(x) for x in cv])
@@ -178,12 +178,12 @@ class TestLmvnpdf(unittest.TestCase):
     def test_lmvnpdffull_with_diagonal_covariance(self):
         self._test_lmvnpdffull_with_diagonal_covariance(5, 10)
 
-    def _test_lmvnpdftied_with_diagonal_covariance(self, ndim, nmix, nobs=100):
-        mu = np.random.randint(10) * np.random.rand(nmix, ndim)
+    def _test_lmvnpdftied_with_diagonal_covariance(self, ndim, nstates, nobs=100):
+        mu = np.random.randint(10) * np.random.rand(nstates, ndim)
         tiedcv = (np.random.rand(ndim) + 1.0)**2
         obs = np.random.randint(10) * np.random.rand(nobs, ndim)
 
-        cv = np.tile(tiedcv, (nmix, 1))
+        cv = np.tile(tiedcv, (nstates, 1))
 
         reference = self._slow_lmvnpdfdiag(obs, mu, cv)
         lpr = gmm.lmvnpdf(obs, mu, np.diag(tiedcv), 'tied')
@@ -200,15 +200,15 @@ class TestLmvnpdf(unittest.TestCase):
         self._test_lmvnpdftied_with_diagonal_covariance(5, 10)
 
     def test_lmvnpdftied_consistent_with_lmvnpdffull(self):
-        nmix = 4
+        nstates = 4
         ndim = 20
         nobs = 200
         
-        mu = np.random.randint(10) * np.random.rand(nmix, ndim)
+        mu = np.random.randint(10) * np.random.rand(nstates, ndim)
         tiedcv = _generate_random_spd_matrix(ndim)
         obs = np.random.randint(10) * np.random.rand(nobs, ndim)
 
-        cv = np.tile(tiedcv, (nmix, 1, 1))
+        cv = np.tile(tiedcv, (nstates, 1, 1))
 
         reference = gmm.lmvnpdf(obs, mu, cv, 'full')
         lpr = gmm.lmvnpdf(obs, mu, tiedcv, 'tied')
@@ -218,16 +218,16 @@ class TestLmvnpdf(unittest.TestCase):
 class TestGMM(unittest.TestCase):
     cvtypes = ['spherical', 'tied', 'diag', 'full']
 
-    nmix = 10
+    nstates = 10
     ndim = 4
-    weights = np.random.rand(nmix)
+    weights = np.random.rand(nstates)
     weights = weights / weights.sum()
-    means = np.random.randint(-20, 20, (nmix, ndim))
-    covars = {'spherical': (0.1 + 2 * np.random.rand(nmix))**2,
+    means = np.random.randint(-20, 20, (nstates, ndim))
+    covars = {'spherical': (0.1 + 2 * np.random.rand(nstates))**2,
               'tied': _generate_random_spd_matrix(ndim),
-              'diag': (0.1 + 2 * np.random.rand(nmix, ndim))**2,
+              'diag': (0.1 + 2 * np.random.rand(nstates, ndim))**2,
               'full': np.array([_generate_random_spd_matrix(ndim)
-                                for x in xrange(nmix)])}
+                                for x in xrange(nstates)])}
     def test_bad_cvtype(self):
         for cvtype in self.cvtypes:
             g = gmm.GMM(20, 1, cvtype)
@@ -235,8 +235,8 @@ class TestGMM(unittest.TestCase):
         self.assertRaises(ValueError, gmm.GMM, 20, 1, 'badcvtype')
 
     def _test_attributes(self, cvtype):
-        g = gmm.GMM(self.nmix, self.ndim, cvtype)
-        self.assertEquals(g.nmix, self.nmix)
+        g = gmm.GMM(self.nstates, self.ndim, cvtype)
+        self.assertEquals(g.nstates, self.nstates)
         self.assertEquals(g.ndim, self.ndim)
         self.assertEquals(g.cvtype, cvtype)
 
@@ -244,19 +244,19 @@ class TestGMM(unittest.TestCase):
         assert_array_almost_equal(g.weights, self.weights)
         self.assertRaises(ValueError, g.__setattr__, 'weights', [])
         self.assertRaises(ValueError, g.__setattr__, 'weights',
-                          np.zeros((self.nmix - 2, self.ndim)))
+                          np.zeros((self.nstates - 2, self.ndim)))
 
         g.means = self.means
         assert_array_almost_equal(g.means, self.means)
         self.assertRaises(ValueError, g.__setattr__, 'means', [])
         self.assertRaises(ValueError, g.__setattr__, 'means',
-                          np.zeros((self.nmix - 2, self.ndim)))
+                          np.zeros((self.nstates - 2, self.ndim)))
 
         g.covars = self.covars[cvtype]
         assert_array_almost_equal(g.covars, self.covars[cvtype])
         self.assertRaises(ValueError, g.__setattr__, 'covars', [])
         self.assertRaises(ValueError, g.__setattr__, 'covars',
-                          np.zeros((self.nmix - 2, self.ndim)))
+                          np.zeros((self.nstates - 2, self.ndim)))
 
     def test_attributes_spherical(self):
         self._test_attributes('spherical')
@@ -268,20 +268,20 @@ class TestGMM(unittest.TestCase):
         self._test_attributes('full')
 
     def _test_eval(self, cvtype):
-        g = gmm.GMM(self.nmix, self.ndim, cvtype)
+        g = gmm.GMM(self.nstates, self.ndim, cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
         g.means = 20 * self.means
         g.covars = self.covars[cvtype]
 
-        gaussidx = np.repeat(range(self.nmix), 5)
+        gaussidx = np.repeat(range(self.nstates), 5)
         nobs = len(gaussidx)
         obs = np.random.randn(nobs, self.ndim) + g.means[gaussidx]
 
         ll, posteriors = g.eval(obs)
 
         self.assertEqual(len(ll), nobs)
-        self.assertEqual(posteriors.shape, (nobs, self.nmix))
+        self.assertEqual(posteriors.shape, (nobs, self.nstates))
         assert_array_almost_equal(posteriors.sum(axis=1), np.ones(nobs))
         assert_array_equal(posteriors.argmax(axis=1), gaussidx)
 
@@ -295,7 +295,7 @@ class TestGMM(unittest.TestCase):
         self._test_eval('full')
 
     def _test_rvs(self, cvtype, n=1000):
-        g = gmm.GMM(self.nmix, self.ndim, cvtype)
+        g = gmm.GMM(self.nstates, self.ndim, cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
         g.means = 20 * self.means
@@ -315,7 +315,7 @@ class TestGMM(unittest.TestCase):
         self._test_rvs('full')
 
     def _test_train(self, cvtype):
-        g = gmm.GMM(self.nmix, self.ndim, cvtype)
+        g = gmm.GMM(self.nstates, self.ndim, cvtype)
         g.weights = self.weights
         g.means = self.means
         g.covars = 20*self.covars[cvtype]
