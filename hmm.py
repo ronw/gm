@@ -11,6 +11,8 @@ from generative_model import GenerativeModel
 from gmm import *
 from gmm import _distribute_covar_matrix_to_match_cvtype, _validate_covars
 
+ZEROLOGPROB = -1e200
+
 #implemented_classes = [_GaussianHMM, _GMMHMM]
 #
 #def HMM(emission_type='gaussian', *args, **kwargs):
@@ -58,26 +60,49 @@ class _BaseHMM(GenerativeModel):
     def eval(self, obs, maxrank=None, beamlogprob=-np.Inf):
         """Compute the log probability under the model and compute posteriors
 
+        Implements rank and beam pruning in the forward-backward
+        algorithm to speed up inference in large models.
+
         Parameters
         ----------
         obs : array_like, shape (n, ndim)
             Sequence of ndim-dimensional data points.  Each row
             corresponds to a single point in the sequence.
+        maxrank : int
+            Maximum rank to evaluate for rank pruning.  If not None,
+            only consider the top `maxrank` states in the inner
+            sum of the forward algorithm recursion.  Defaults to None
+            (no rank pruning).  See The HTK Book for more details.
+        beamlogprob : float
+            Width of the beam-pruning beam in log-probability units.
+            Defaults to -numpy.Inf (no beam pruning).  See The HTK
+            Book for more details.
 
         Returns
         -------
         logprob : array_like, shape (n,)
-            Log probabilities of each data point in `obs`
+            Log probabilities of the sequence `obs`
         posteriors: array_like, shape (n, nstates)
             Posterior probabilities of each state for each
             observation
+
+        See Also
+        --------
+        lpdf : Compute the log probability under the model
+        decode : Find most likely state sequence corresponding to a `obs`
         """
         obsll = self._compute_obs_log_likelihood(obs)
         logprob, fwdlattice = self._do_forward_pass(obsll, maxrank, beamlogprob)
         bwdlattice = self._do_backward_pass(obsll, fwdlattice, maxrank,
                                             beamlogprob)
-        posteriors = np.exp(fwdlattice + bwdlattice,
-                            np.tile(logprob[:,np.newaxis], (1, self._nstates)))
+
+        gamma = fwdlattice + bwdlattice
+        # gamma is guaranteed to be correctly normalized by logprob at
+        # all frames, unless we do approximate inference using pruning.
+        # So, we will normalize each frame explicitly in case we
+        # pruned too aggressively.
+        #posteriors = np.exp(gamma - logprob)
+        posteriors = np.exp(gamma.T - logsum(gamma, axis=1)).T
         return logprob, posteriors
 
     def lpdf(self, obs, maxrank=None, beamlogprob=-np.Inf):
@@ -88,34 +113,64 @@ class _BaseHMM(GenerativeModel):
         obs : array_like, shape (n, ndim)
             Sequence of ndim-dimensional data points.  Each row
             corresponds to a single data point.
+        maxrank : int
+            Maximum rank to evaluate for rank pruning.  If not None,
+            only consider the top `maxrank` states in the inner
+            sum of the forward algorithm recursion.  Defaults to None
+            (no rank pruning).  See The HTK Book for more details.
+        beamlogprob : float
+            Width of the beam-pruning beam in log-probability units.
+            Defaults to -numpy.Inf (no beam pruning).  See The HTK
+            Book for more details.
 
         Returns
         -------
         logprob : array_like, shape (n,)
             Log probabilities of each data point in `obs`
+
+        See Also
+        --------
+        eval : Compute the log probability under the model and compute posteriors
+        decode : Find most likely state sequence corresponding to a `obs`
         """
         obsll = self._compute_obs_log_likelihood(obs)
         logprob, fwdlattice =  self._do_forward_pass(obsll, maxrank,
                                                      beamlogprob)
         return logprob
 
-    def decode(self, obs):
-        """Find most likely states for each point in `obs`.
+    def decode(self, obs, maxrank=None, beamlogprob=-np.Inf):
+        """Find most likely state sequence corresponding to `obs`.
+
+        Uses the Viterbi algorithm.
 
         Parameters
         ----------
         obs : array_like, shape (n, ndim)
             List of ndim-dimensional data points.  Each row corresponds to a
             single data point.
+        maxrank : int
+            Maximum rank to evaluate for rank pruning.  If not None,
+            only consider the top `maxrank` states in the inner
+            sum of the forward algorithm recursion.  Defaults to None
+            (no rank pruning).  See The HTK Book for more details.
+        beamlogprob : float
+            Width of the beam-pruning beam in log-probability units.
+            Defaults to -numpy.Inf (no beam pruning).  See The HTK
+            Book for more details.
 
         Returns
         -------
         components : array_like, shape (n,)
-            Index of the most likelihod states for each observation
+            Index of the most likelihood states for each observation
+
+        See Also
+        --------
+        eval : Compute the log probability under the model and compute posteriors
+        lpdf : Compute the log probability under the model
         """
         obsll = self._compute_obs_log_likelihood(obs)
-        logprob, state_sequence = self._do_forward_pass_viterbi(obsll, maxrank,
-                                                                beamlogprob)
+        logprob, state_sequence = self._do_viterbi_pass(obsll, maxrank,
+                                                        beamlogprob)
         return state_sequence
         
     def rvs(self, n=1):
@@ -174,7 +229,7 @@ class _BaseHMM(GenerativeModel):
             self.startprob = np.tile(1.0 / self._nstates, self._nstates)
         if 't' in params:
             shape = (self._nstates, self._nstates)
-            self.startprob = np.tile(1.0 / self._nstates,  shape)
+            self.transmat = np.tile(1.0 / self._nstates, shape)
 
     def train(self, obs, iter=10, min_covar=1.0, verbose=False, thresh=1e-2,
               params='stmc'):
@@ -262,50 +317,57 @@ class _BaseHMM(GenerativeModel):
         
         self._log_transmat = np.log(np.array(transmat).copy())
 
-    def _do_forward_pass_viterbi(self, *args, **kwargs):
-        logprob, lattice = _do_forward_pass(*args, fun=np.max, **kwards)
+    def _do_viterbi_pass(self, framelogprob, maxrank=None, beamlogprob=-np.Inf):
+        nobs = len(framelogprob)
+        lattice = np.zeros((nobs, self._nstates))
+        traceback = np.zeros((nobs, self._nstates)) 
 
+        lattice[0] = self._log_startprob + framelogprob[0]
+        for n in xrange(1, nobs):
+            idx = self._prune_states(lattice[n-1], maxrank, beamlogprob)
+            pr = self._log_transmat[idx].T + lattice[n-1,idx]
+            lattice[n]   = np.max(pr, axis=1) + framelogprob[n]
+            traceback[n] = np.argmax(pr, axis=1)
+        lattice[lattice <= ZEROLOGPROB] = -np.Inf;
+        print lattice
+        
         # Do traceback.
         reverse_state_sequence = []
         s = lattice[-1].argmax()
-        for frame in reversed(lattice[:-1]):
+        for frame in reversed(traceback):
             reverse_state_sequence.append(s)
             s = frame[s]
 
         reverse_state_sequence.reverse()
-        return logprob, reverse_state_sequence
+        return logsum(lattice[-1]), reverse_state_sequence
 
-    def _do_forward_pass(self, framelogprob, maxrank=None, beamlogprob=-np.Inf,
-                         fun=logsum):
-        fwdlattice = np.zeros(self._nstates, len(obsll))
+    def _do_forward_pass(self, framelogprob, maxrank=None, beamlogprob=-np.Inf):
+        nobs = len(framelogprob)
+        fwdlattice = np.zeros((nobs, self._nstates))
 
-        fwdlattice[0] = self._startprob + framelogprob[0]
-        for n in xrange(1, len(framelogprob)):
+        fwdlattice[0] = self._log_startprob + framelogprob[0]
+        for n in xrange(1, nobs):
             idx = self._prune_states(fwdlattice[n-1], maxrank, beamlogprob)
-            pr = (self._log_transmat[idx]
-                  + np.tile(fwdlattice[n,idx][:,np.newaxis],
-                            (1, self._nstates)))
-            fwdlattice[n] = fun(pr, axis=1) + framelogprob[n]
+            pr = self._log_transmat[idx].T + fwdlattice[n-1,idx]
+            fwdlattice[n] = logsum(pr, axis=1) + framelogprob[n]
         fwdlattice[fwdlattice <= ZEROLOGPROB] = -np.Inf;
 
         return logsum(fwdlattice[-1]), fwdlattice
 
     def _do_backward_pass(self, framelogprob, fwdlattice, maxrank=None,
                           beamlogprob=-np.Inf):
-        bwdlattice = np.zeros(self._nstates, len(obsll))
-        for n in xrange(len(framelogprob) - 1, 0, -1):
+        nobs = len(framelogprob)
+        bwdlattice = np.zeros((nobs, self._nstates))
+        for n in xrange(nobs - 1, 0, -1):
             # Do HTK style pruning (p. 137 of HTK Book version 3.4).
             # Don't bother computing backward probability if
             # fwdlattice * bwdlattice is more than a certain distance
             # from the total log likelihood.
-            idx = self._prune_states(bwdlattice[n] + alpha[n], None,
+            idx = self._prune_states(bwdlattice[n] + fwdlattice[n], None,
                                      -50)
                                      #beamlogprob)
-                                     #-np.Inf)
-            pr = (self._log_transmat[idx]
-                  + np.tile((bwdlattice[n,idx]
-                             + framelogprob[n,idx])[:,np.newaxis],
-                            (1, self._nstates)))
+                                     #-np.Inf
+            pr = self._log_transmat[idx].T + bwdlattice[n,idx] + framelogprob[n]
             bwdlattice[n-1] = logsum(pr, axis=1)
         bwdlattice[bwdlattice <= ZEROLOGPROB] = -np.Inf;
 
@@ -324,22 +386,22 @@ class _BaseHMM(GenerativeModel):
             nbins = 3 * len(lattice_frame)
 
             lattice_min = lattice_frame[lattice_frame > ZEROLOGPROB].min() - 1
-            hst, cdf = np.histogram(tmp, bins=nbins, new=True,
+            hst, cdf = np.histogram(lattice_frame, bins=nbins, new=True,
                                     range=(lattice_min, lattice_frame.max()))
         
             # Want to look at the high ranks.
-            hst = hst[::-1]
+            hst = hst[::-1].cumsum()
             cdf = cdf[::-1]
-    
-            hst = hst.cumsum()
-            rankthresh = cdf[hst.cumsum() >= maxrank].argmin()
+
+            rankthresh = cdf[hst >= min(maxrank, self._nstates)].max()
       
             # Only change the threshold if it is stricter than the beam
             # threshold.
             threshlogprob = max(threshlogprob, rankthresh)
     
         # Which states are active?
-        state_idx, = where(lattice_frame >= threshlogprob)
+        state_idx, = np.nonzero(lattice_frame >= threshlogprob)
+        return state_idx
 
     @abc.abstractmethod
     def _compute_obs_log_likelihood(self, obs):
@@ -508,10 +570,14 @@ class _GaussianHMM(_BaseHMM):
         self._covars = np.array(covars).copy()
 
     def _compute_obs_log_likelihood(self, obs):
-        pass
+        return lmvnpdf(obs, self._means, self._covars, self._cvtype)
 
     def _generate_sample_from_state(self, state):
-        pass
+        if self._cvtype == 'tied':
+            cv = self._covars
+        else:
+            cv = self._covars[state]
+        return sample_gaussian(self._means[state], cv, self._cvtype)
 
     def _mstep():
         pass

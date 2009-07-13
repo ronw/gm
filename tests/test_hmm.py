@@ -10,6 +10,153 @@ from test_gmm import _generate_random_spd_matrix
 
 import hmm
 
+class TestBaseHMM(unittest.TestCase):
+    class StubHMM(hmm._BaseHMM):
+        @property
+        def emission_type(self):
+            return "none"
+        def _compute_obs_log_likelihood(self):
+            pass
+        def _generate_sample_from_state(self):
+            pass
+        def _mstep(self):
+            pass
+
+    def test_prune_states_no_pruning(self):
+        h = self.StubHMM(10)
+        lattice_frame = np.arange(h.nstates)
+
+        idx = h._prune_states(lattice_frame, None, -np.Inf)
+        assert_array_equal(idx, range(h.nstates))
+
+    def test_prune_states_rank(self):
+        h = self.StubHMM(10)
+        lattice_frame = np.arange(h.nstates)
+
+        idx = h._prune_states(lattice_frame, 1, -np.Inf)
+        assert_array_equal(idx, [lattice_frame.argmax()])
+
+    def test_prune_states_beam(self):
+        h = self.StubHMM(10)
+        lattice_frame = np.arange(h.nstates)
+
+        beamlogprob = -h.nstates / 2
+        idx = h._prune_states(lattice_frame, None, beamlogprob)
+        refidx, = np.nonzero(lattice_frame >= -beamlogprob)
+        assert_array_equal(idx, refidx)
+
+    def _setup_example_hmm(self):
+        # Example from http://en.wikipedia.org/wiki/Forward-backward_algorithm
+        h = self.StubHMM(2)
+        h.transmat = [[0.7, 0.3], [0.3, 0.7]]
+        h.start_prob = [0.5, 0.5]
+        framelogprob = np.log([[0.9, 0.2],
+                               [0.9, 0.2],
+                               [0.1, 0.8],
+                               [0.9, 0.2],
+                               [0.9, 0.2]])
+        # Add dummy observations to stub.
+        h._compute_obs_log_likelihood = lambda obs: framelogprob
+        return h, framelogprob
+
+    def test_do_forward_pass(self):
+        h, framelogprob = self._setup_example_hmm()
+
+        logprob, fwdlattice = h._do_forward_pass(framelogprob)
+
+        reflogprob = -3.3725
+        self.assertAlmostEqual(logprob, reflogprob, places=4)
+
+        reffwdlattice = np.array([[0.4500, 0.1000],
+                                  [0.3105, 0.0410],
+                                  [0.0230, 0.0975],
+                                  [0.0408, 0.0150],
+                                  [0.0298, 0.0046]])
+        assert_array_almost_equal(np.exp(fwdlattice), reffwdlattice, 4)
+
+    def test_do_backward_pass(self):
+        h, framelogprob = self._setup_example_hmm()
+
+        fakefwdlattice = np.zeros((len(framelogprob), 2))
+        bwdlattice = h._do_backward_pass(framelogprob, fakefwdlattice)
+        
+        refbwdlattice = np.array([[0.0661, 0.0455],
+                                  [0.0906, 0.1503],
+                                  [0.4593, 0.2437],
+                                  [0.6900, 0.4100],
+                                  [1.0000, 1.0000]])
+        assert_array_almost_equal(np.exp(bwdlattice), refbwdlattice, 4)
+
+    def test_do_viterbi_pass(self):
+        h, framelogprob = self._setup_example_hmm()
+
+        logprob, state_sequence = h._do_viterbi_pass(framelogprob)
+
+        refstate_sequence = [0, 0, 1, 0, 0]
+        assert_array_equal(state_sequence, refstate_sequence)
+
+        reflogprob = -4.8157
+        self.assertAlmostEqual(logprob, reflogprob, places=4)
+
+    def test_eval(self):
+        h, framelogprob = self._setup_example_hmm()
+        nobs = len(framelogprob)
+
+        logprob, posteriors = h.eval([])
+
+        assert_array_almost_equal(posteriors.sum(axis=1), np.ones(nobs))
+
+        reflogprob = -3.3725
+        self.assertAlmostEqual(logprob, reflogprob, places=4)
+
+        refposteriors = np.array([[0.8673, 0.1327],
+                                  [0.8204, 0.1796],
+                                  [0.3075, 0.6925],
+                                  [0.8204, 0.1796],
+                                  [0.8673, 0.1327]])
+        assert_array_almost_equal(posteriors, refposteriors, decimal=4)
+
+    def test_hmm_eval_consistent_with_gmm(self):
+        nstates = 8
+        nobs = 10
+        h = self.StubHMM(nstates)
+
+        # Add dummy observations to stub.
+        framelogprob = np.log(np.random.rand(nobs, nstates))
+        h._compute_obs_log_likelihood = lambda obs: framelogprob
+
+        # If startprob and transmat are uniform across all states (the
+        # default), the transitions are uninformative - the model
+        # reduces to a GMM with uniform mixing weights (in terms of
+        # posteriors, not likelihoods).
+        logprob, hmmposteriors = h.eval([], maxrank=5)
+
+        assert_array_almost_equal(hmmposteriors.sum(axis=1), np.ones(nobs))
+
+        norm = hmm.logsum(framelogprob, axis=1)[:,np.newaxis]
+        gmmposteriors = np.exp(framelogprob - np.tile(norm,  (1, nstates)))
+        assert_array_almost_equal(hmmposteriors, gmmposteriors)
+
+    def test_hmm_decode_consistent_with_gmm(self):
+        nstates = 8
+        nobs = 10
+        h = self.StubHMM(nstates)
+
+        # Add dummy observations to stub.
+        framelogprob = np.log(np.random.rand(nobs, nstates))
+        h._compute_obs_log_likelihood = lambda obs: framelogprob
+
+        # If startprob and transmat are uniform across all states (the
+        # default), the transitions are uninformative - the model
+        # reduces to a GMM with uniform mixing weights (in terms of
+        # posteriors, not likelihoods).
+        state_sequence = h.decode([])
+
+        norm = hmm.logsum(framelogprob, axis=1)[:,np.newaxis]
+        gmmposteriors = np.exp(framelogprob - np.tile(norm,  (1, nstates)))
+        assert_array_almost_equal(hmmposteriors, gmmposteriors)
+
+
 class TestGaussianHMM(unittest.TestCase):
     cvtypes = ['spherical', 'tied', 'diag', 'full']
 
