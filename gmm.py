@@ -339,9 +339,7 @@ class GMM(GenerativeModel):
                 cv = self._covars
             else:
                 cv = self._covars[c]
-            samp = sample_gaussian(self._means[c], cv, self._cvtype)
-
-            obs[x] = sample_gaussian(self._means[c], cv, self._cvtype)[:]
+            obs[x] = sample_gaussian(self._means[c], cv, self._cvtype)
         return obs
 
     def init(self, obs, params='wmc', **kwargs):
