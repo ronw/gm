@@ -95,7 +95,7 @@ class TestBaseHMM(unittest.TestCase):
         refstate_sequence = [0, 0, 1, 0, 0]
         assert_array_equal(state_sequence, refstate_sequence)
 
-        reflogprob = -4.8157
+        reflogprob = -4.3500
         self.assertAlmostEqual(logprob, reflogprob, places=4)
 
     def test_eval(self):
