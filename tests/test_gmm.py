@@ -216,9 +216,7 @@ class TestLmvnpdf(unittest.TestCase):
         assert_array_almost_equal(lpr, reference)
 
 
-class TestGMM(unittest.TestCase):
-    cvtypes = ['spherical', 'tied', 'diag', 'full']
-
+class GMMTester():
     nstates = 10
     ndim = 4
     weights = np.random.rand(nstates)
@@ -229,17 +227,17 @@ class TestGMM(unittest.TestCase):
               'diag': (0.1 + 2 * np.random.rand(nstates, ndim))**2,
               'full': np.array([_generate_random_spd_matrix(ndim)
                                 for x in xrange(nstates)])}
+
     def test_bad_cvtype(self):
-        for cvtype in self.cvtypes:
-            g = gmm.GMM(20, 1, cvtype)
+        g = gmm.GMM(20, 1, self.cvtype)
 
         self.assertRaises(ValueError, gmm.GMM, 20, 1, 'badcvtype')
 
-    def _test_attributes(self, cvtype):
-        g = gmm.GMM(self.nstates, self.ndim, cvtype)
+    def test_attributes(self):
+        g = gmm.GMM(self.nstates, self.ndim, self.cvtype)
         self.assertEquals(g.nstates, self.nstates)
         self.assertEquals(g.ndim, self.ndim)
-        self.assertEquals(g.cvtype, cvtype)
+        self.assertEquals(g.cvtype, self.cvtype)
 
         g.weights = self.weights
         assert_array_almost_equal(g.weights, self.weights)
@@ -255,18 +253,18 @@ class TestGMM(unittest.TestCase):
         self.assertRaises(ValueError, g.__setattr__, 'means',
                           np.zeros((self.nstates - 2, self.ndim)))
 
-        g.covars = self.covars[cvtype]
-        assert_array_almost_equal(g.covars, self.covars[cvtype])
+        g.covars = self.covars[self.cvtype]
+        assert_array_almost_equal(g.covars, self.covars[self.cvtype])
         self.assertRaises(ValueError, g.__setattr__, 'covars', [])
         self.assertRaises(ValueError, g.__setattr__, 'covars',
                           np.zeros((self.nstates - 2, self.ndim)))
 
-    def _test_eval(self, cvtype):
-        g = gmm.GMM(self.nstates, self.ndim, cvtype)
+    def test_eval(self):
+        g = gmm.GMM(self.nstates, self.ndim, self.cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
         g.means = 20 * self.means
-        g.covars = self.covars[cvtype]
+        g.covars = self.covars[self.cvtype]
 
         gaussidx = np.repeat(range(self.nstates), 5)
         nobs = len(gaussidx)
@@ -279,47 +277,54 @@ class TestGMM(unittest.TestCase):
         assert_array_almost_equal(posteriors.sum(axis=1), np.ones(nobs))
         assert_array_equal(posteriors.argmax(axis=1), gaussidx)
 
-    def _test_rvs(self, cvtype, n=1000):
-        g = gmm.GMM(self.nstates, self.ndim, cvtype)
+    def test_rvs(self, n=1000):
+        g = gmm.GMM(self.nstates, self.ndim, self.cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
         g.means = 20 * self.means
-        g.covars = np.maximum(self.covars[cvtype], 0.1)
+        g.covars = np.maximum(self.covars[self.cvtype], 0.1)
         g.weights = self.weights
 
         samples = g.rvs(n)
         self.assertEquals(samples.shape, (n, self.ndim))
 
-    def _test_train(self, cvtype, params='wmc'):
-        g = gmm.GMM(self.nstates, self.ndim, cvtype)
+    def test_train(self, params='wmc'):
+        g = gmm.GMM(self.nstates, self.ndim, self.cvtype)
         g.weights = self.weights
         g.means = self.means
-        g.covars = 20*self.covars[cvtype]
+        g.covars = 20*self.covars[self.cvtype]
 
         # Create a training and testing set by sampling from the same
         # distribution.
         train_obs = g.rvs(n=100)
-        test_obs = g.rvs(n=10)
+        test_obs = g.rvs(n=2)
 
         g.init(train_obs, params=params, minit='points')
         init_testll = g.lpdf(test_obs).sum()
 
-        trainll = g.train(train_obs, params=params)
+        trainll = g.train(train_obs, iter=20, params=params)
         self.assert_(np.all(np.diff(trainll) > -1))
 
         post_testll = g.lpdf(test_obs).sum()
+        #print self.__class__.__name__, init_testll, post_testll
         self.assertTrue(post_testll >= init_testll)
 
-    for fun in ('attributes', 'rvs', 'eval', 'train'):
-        for cvtype in cvtypes:
-            defun = """def test_%s_%s(self):
-                           self._test_%s('%s')""" % (fun, cvtype, fun, cvtype)
-            exec(defun)
 
-    for params in ('m', 'wm'):
-        defun = """def test_train_%s(self):
-                       self._test_train('spherical', '%s')""" % (params, params)
-        exec(defun)
+class TestGMMWithSphericalCovars(unittest.TestCase, GMMTester):
+    cvtype = 'spherical'
+
+
+class TestGMMWithDiagonalCovars(unittest.TestCase, GMMTester):
+    cvtype = 'diag'
+
+
+class TestGMMWithTiedCovars(unittest.TestCase, GMMTester):
+    cvtype = 'tied'
+
+
+class TestGMMWithFullCovars(unittest.TestCase, GMMTester):
+    cvtype = 'full'
+
 
 if __name__ == '__main__':
     unittest.main()

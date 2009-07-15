@@ -277,8 +277,7 @@ class GMM(GenerativeModel):
         lpr = (lmvnpdf(obs, self._means, self._covars, self._cvtype)
                + np.tile(self._log_weights, (len(obs), 1)))
         logprob = logsum(lpr, axis=1)
-        posteriors = np.exp(lpr
-                            - np.tile(logprob[:,np.newaxis], (1, self._nstates)))
+        posteriors = np.exp(lpr - np.tile(logprob, (self._nstates, 1)).T)
         return logprob, posteriors
 
     def lpdf(self, obs):
@@ -432,7 +431,7 @@ class GMM(GenerativeModel):
             # Maximization step
             w = posteriors.sum(axis=0)
             avg_obs = np.dot(posteriors.T, obs)
-            norm = np.tile(1.0 / w[:,np.newaxis], (1, self._ndim))
+            norm = np.tile(1.0 / w, (self._ndim, 1)).T
 
             if 'w' in params:
                 self.weights = w / w.sum()
@@ -447,32 +446,31 @@ class GMM(GenerativeModel):
 
 def _lmvnpdfdiag(obs, means=0.0, covars=1.0):
     nobs, ndim = obs.shape
-
     # (x-y).T A (x-y) = x.T A x - 2x.T A y + y.T A y
-    lpr = -0.5 * (np.tile((np.sum((means**2) / covars, 1)
-                           + np.sum(np.log(covars), 1))[np.newaxis,:], (nobs,1))
+    #lpr = -0.5 * (np.tile((np.sum((means**2) / covars, 1)
+    #                       + np.sum(np.log(covars), 1))[np.newaxis,:], (nobs,1))
+    lpr = -0.5 * (ndim * np.log(2 * np.pi) + np.sum(np.log(covars), 1)
+                  + np.sum((means**2) / covars, 1)
                   - 2 * np.dot(obs, (means / covars).T)
-                  + np.dot(obs**2, (1.0 / covars).T)
-                  + ndim * np.log(2 * np.pi))
+                  + np.dot(obs**2, (1.0 / covars).T))
+
     return lpr
 
 def _lmvnpdfspherical(obs, means=0.0, covars=1.0):
     cv = covars.copy()
     if covars.ndim == 1:
         cv = cv[:,np.newaxis]
-
     return _lmvnpdfdiag(obs, means, np.tile(cv, (1, obs.shape[-1])))
 
 def _lmvnpdftied(obs, means, covars):
     nobs, ndim = obs.shape
     nmix = len(means)
-
     # (x-y).T A (x-y) = x.T A x - 2x.T A y + y.T A y
     icv = np.linalg.inv(covars)
-    lpr = -0.5 * (np.tile(np.sum(obs * np.dot(obs, icv), 1), (nmix, 1)).T
+    lpr = -0.5 * (ndim * np.log(2 * np.pi) + np.log(np.linalg.det(covars))
+                  + np.tile(np.sum(obs * np.dot(obs, icv), 1), (nmix, 1)).T
                   - 2 * np.dot(np.dot(obs, icv), means.T)
-                  + np.tile(np.sum(means * np.dot(means, icv), 1), (nobs, 1))
-                  + ndim * np.log(2 * np.pi) + np.log(np.linalg.det(covars)))
+                  + np.tile(np.sum(means * np.dot(means, icv), 1), (nobs, 1)))
     return lpr
 
 def _lmvnpdffull(obs, means, covars):
@@ -581,15 +579,14 @@ def _covar_mstep_slow(gmm, obs, posteriors, avg_obs, norm, min_covar):
     w = posteriors.sum(axis=0)
     covars = np.zeros(gmm.covars.shape)
     for c in xrange(gmm._nstates):
-        mu = gmm._means[np.newaxis,c]
+        mu = gmm._means[c]
         #cv = np.dot(mu.T, mu)
         avg_obs2 = np.zeros((gmm._ndim, gmm._ndim))
         for t,o in enumerate(obs):
-            avg_obs2 += posteriors[t,c] * np.dot(o[np.newaxis,:].T,
-                                                 o[np.newaxis,:])
+            avg_obs2 += posteriors[t,c] * np.outer(o, o)
         cv = (avg_obs2 / w[c]
-              - 2 * np.dot(avg_obs[np.newaxis,c].T / w[c], mu)
-              + np.dot(mu.T, mu)
+              - 2 * np.outer(avg_obs[c] / w[c], mu)
+              + np.outer(mu, mu)
               + min_covar * np.eye(gmm._ndim))
         if gmm.cvtype == 'spherical':
             covars[c] = np.diag(cv).mean()
