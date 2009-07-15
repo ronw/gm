@@ -8,6 +8,8 @@ import scipy.stats
 
 import gmm
 
+np.random.seed(0)
+
 def _generate_random_spd_matrix(ndim):
     """Return a random symmetric, positive-definite matrix."""
     A = np.random.rand(ndim, ndim)
@@ -259,15 +261,6 @@ class TestGMM(unittest.TestCase):
         self.assertRaises(ValueError, g.__setattr__, 'covars',
                           np.zeros((self.nstates - 2, self.ndim)))
 
-    def test_attributes_spherical(self):
-        self._test_attributes('spherical')
-    def test_attributes_tied(self):
-        self._test_attributes('tied')
-    def test_attributes_diag(self):
-        self._test_attributes('diag')
-    def test_attributes_full(self):
-        self._test_attributes('full')
-
     def _test_eval(self, cvtype):
         g = gmm.GMM(self.nstates, self.ndim, cvtype)
         # Make sure the means are far apart so posteriors.argmax()
@@ -286,15 +279,6 @@ class TestGMM(unittest.TestCase):
         assert_array_almost_equal(posteriors.sum(axis=1), np.ones(nobs))
         assert_array_equal(posteriors.argmax(axis=1), gaussidx)
 
-    def test_eval_spherical(self):
-        self._test_eval('spherical')
-    def test_eval_tied(self):
-        self._test_eval('tied')
-    def test_eval_diag(self):
-        self._test_eval('diag')
-    def test_eval_full(self):
-        self._test_eval('full')
-
     def _test_rvs(self, cvtype, n=1000):
         g = gmm.GMM(self.nstates, self.ndim, cvtype)
         # Make sure the means are far apart so posteriors.argmax()
@@ -306,16 +290,7 @@ class TestGMM(unittest.TestCase):
         samples = g.rvs(n)
         self.assertEquals(samples.shape, (n, self.ndim))
 
-    def test_rvs_spherical(self):
-        self._test_rvs('spherical')
-    def test_rvs_tied(self):
-        self._test_rvs('tied')
-    def test_rvs_diag(self):
-        self._test_rvs('diag')
-    def test_rvs_full(self):
-        self._test_rvs('full')
-
-    def _test_train(self, cvtype):
+    def _test_train(self, cvtype, params='wmc'):
         g = gmm.GMM(self.nstates, self.ndim, cvtype)
         g.weights = self.weights
         g.means = self.means
@@ -323,27 +298,28 @@ class TestGMM(unittest.TestCase):
 
         # Create a training and testing set by sampling from the same
         # distribution.
-        train_obs = g.rvs(n=200)
-        test_obs = g.rvs(n=20)
+        train_obs = g.rvs(n=100)
+        test_obs = g.rvs(n=10)
 
-        g.init(train_obs, minit='points')
-        init_testll = g.eval(test_obs)[0].sum()
+        g.init(train_obs, params=params, minit='points')
+        init_testll = g.lpdf(test_obs).sum()
 
-        trainll = g.train(train_obs)
+        trainll = g.train(train_obs, params=params)
         self.assert_(np.all(np.diff(trainll) > -1))
 
-        post_testll = g.eval(test_obs)[0].sum()
-        self.assertTrue(post_testll > init_testll)
+        post_testll = g.lpdf(test_obs).sum()
+        self.assertTrue(post_testll >= init_testll)
 
-    def test_train_spherical(self):
-        self._test_train('spherical')
-    def test_train_tied(self):
-        self._test_train('tied')
-    def test_train_diag(self):
-        self._test_train('diag')
-    def test_train_full(self):
-        self._test_train('full')
-        
+    for fun in ('attributes', 'rvs', 'eval', 'train'):
+        for cvtype in cvtypes:
+            defun = """def test_%s_%s(self):
+                           self._test_%s('%s')""" % (fun, cvtype, fun, cvtype)
+            exec(defun)
+
+    for params in ('m', 'wm'):
+        defun = """def test_train_%s(self):
+                       self._test_train('spherical', '%s')""" % (params, params)
+        exec(defun)
 
 if __name__ == '__main__':
     unittest.main()
