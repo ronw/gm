@@ -18,7 +18,7 @@ class GenerativeModel(object):
         logprob : array_like
             Log probabilities of each data point in `obs`.
         """
-        logprob,posteriors = self.eval(obs, *args, **kwargs)
+        logprob, posteriors = self.eval(obs, *args, **kwargs)
         return logprob
 
     def pdf(self, obs, *args, **kwargs):

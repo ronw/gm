@@ -2,7 +2,6 @@ import itertools
 import time
 
 import numpy as np
-import matplotlib.pyplot as plt
 import scipy as sp
 import scipy.cluster
 
@@ -11,10 +10,11 @@ from generative_model import GenerativeModel
 ZEROLOGPROB = -1e200
 
 def almost_equal(actual, desired, decimal=7):
+    """Check that two floats are approximately equal."""
     return abs(desired - actual) < 0.5 * 10**(-decimal)
 
 def logsum(A, axis=None):
-    """ Computes the sum of A assuming A is in the log domain.
+    """Computes the sum of A assuming A is in the log domain.
 
     Returns log(sum(exp(A), axis)) while minimizing the possibility of
     over/underflow.
@@ -100,7 +100,7 @@ def sample_gaussian(mean, covar, cvtype='diag', n=1):
     elif cvtype == 'diag':
         rand = np.dot(np.diag(np.sqrt(covar)), rand)
     else:
-        U,s,V = np.linalg.svd(covar)
+        U, s, V = np.linalg.svd(covar)
         sqrtS = np.diag(np.sqrt(s))
         sqrt_covar = np.dot(U, np.dot(sqrtS, V))
         rand = np.dot(sqrt_covar, rand)
@@ -294,7 +294,7 @@ class GMM(GenerativeModel):
         logprob : array_like, shape (n,)
             Log probabilities of each data point in `obs`
         """
-        logprob,posteriors = self.eval(obs)
+        logprob, posteriors = self.eval(obs)
         return logprob
 
     def decode(self, obs):
@@ -363,7 +363,8 @@ class GMM(GenerativeModel):
         """
         
         if 'm' in params:
-            self._means,tmp = sp.cluster.vq.kmeans2(obs, self._nstates, **kwargs)
+            self._means, tmp = sp.cluster.vq.kmeans2(obs, self._nstates,
+                                                     **kwargs)
         if 'w' in params:
             self.weights = np.tile(1.0 / self._nstates, self._nstates)
         if 'c' in params:
@@ -375,7 +376,8 @@ class GMM(GenerativeModel):
 
     def train(self, obs, iter=10, min_covar=1.0, verbose=False, thresh=1e-2,
               params='wmc'):
-        """Estimate model parameters with the expectation-maximization algorithm.
+        """Estimate model parameters with the expectation-maximization
+        algorithm.
 
         Parameters
         ----------
@@ -413,7 +415,7 @@ class GMM(GenerativeModel):
         logprob = []
         for i in xrange(iter):
             # Expectation step
-            curr_logprob,posteriors = self.eval(obs)
+            curr_logprob, posteriors = self.eval(obs)
             logprob.append(curr_logprob.sum())
 
             if verbose:
@@ -448,7 +450,7 @@ def _lmvnpdfdiag(obs, means=0.0, covars=1.0):
     nobs, ndim = obs.shape
     # (x-y).T A (x-y) = x.T A x - 2x.T A y + y.T A y
     #lpr = -0.5 * (np.tile((np.sum((means**2) / covars, 1)
-    #                       + np.sum(np.log(covars), 1))[np.newaxis,:], (nobs,1))
+    #                      + np.sum(np.log(covars), 1))[np.newaxis,:], (nobs,1))
     lpr = -0.5 * (ndim * np.log(2 * np.pi) + np.sum(np.log(covars), 1)
                   + np.sum((means**2) / covars, 1)
                   - 2 * np.dot(obs, (means / covars).T)
@@ -555,7 +557,7 @@ def _covar_mstep_full(gmm, obs, posteriors, avg_obs, norm, min_covar):
     # Distribution"
     avg_obs2 = np.dot(obs.T, obs)
     #avg_obs2 = np.dot(obs.T, avg_obs)
-    cv = np.empty((nstates, gmm._ndim, gmm._ndim))
+    cv = np.empty((gmm._nstates, gmm._ndim, gmm._ndim))
     for c in xrange(gmm._nstates):
         wobs = obs.T * np.tile(posteriors[:,c], (gmm._ndim, 1))
         avg_obs2 = np.dot(wobs, obs) / posteriors[:,c].sum()
@@ -565,7 +567,7 @@ def _covar_mstep_full(gmm, obs, posteriors, avg_obs, norm, min_covar):
     return cv
 
 def _covar_mstep_tied2(*args):
-    return gmm._covar_mstep_full(*args).mean(axis=0)
+    return _covar_mstep_full(*args).mean(axis=0)
 
 def _covar_mstep_tied(gmm, obs, posteriors, avg_obs, norm, min_covar):
     print "THIS IS BROKEN"

@@ -3,7 +3,6 @@ import itertools
 import time
 
 import numpy as np
-import matplotlib.pyplot as plt
 import scipy as sp
 import scipy.cluster
 
@@ -627,7 +626,7 @@ class _GaussianHMM(_BaseHMM):
         if self._cvtype in ('spherical', 'diag'):
             stats['obs**2'] += np.dot(posteriors.T, obs**2) * norm
         elif self._cvtype in ('tied', 'full'):
-            for t,o in enumerate(obs):
+            for t, o in enumerate(obs):
                 obsTobs = np.outer(o, o)
                 for c in xrange(self._nstates):
                     stats['obs.T*obs'][c] += posteriors[t,c] * obsTobs / w[c]
