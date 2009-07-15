@@ -10,6 +10,8 @@ from test_gmm import _generate_random_spd_matrix
 
 import hmm
 
+np.random.seed(0)
+
 class TestBaseHMM(unittest.TestCase):
     class StubHMM(hmm._BaseHMM):
         @property
@@ -19,9 +21,13 @@ class TestBaseHMM(unittest.TestCase):
             pass
         def _generate_sample_from_state(self):
             pass
+        def _init_sufficient_statistics(self):
+            pass
+        def _accumulate_sufficient_statistics(self):
+            pass
         def _mstep(self):
             pass
-
+    
     def test_prune_states_no_pruning(self):
         h = self.StubHMM(10)
         lattice_frame = np.arange(h.nstates)
@@ -129,7 +135,7 @@ class TestBaseHMM(unittest.TestCase):
         # default), the transitions are uninformative - the model
         # reduces to a GMM with uniform mixing weights (in terms of
         # posteriors, not likelihoods).
-        logprob, hmmposteriors = h.eval([], maxrank=5)
+        logprob, hmmposteriors = h.eval([])
 
         assert_array_almost_equal(hmmposteriors.sum(axis=1), np.ones(nobs))
 
@@ -150,155 +156,167 @@ class TestBaseHMM(unittest.TestCase):
         # default), the transitions are uninformative - the model
         # reduces to a GMM with uniform mixing weights (in terms of
         # posteriors, not likelihoods).
-        state_sequence = h.decode([])
+        viterbi_ll, state_sequence = h.decode([])
 
         norm = hmm.logsum(framelogprob, axis=1)[:,np.newaxis]
         gmmposteriors = np.exp(framelogprob - np.tile(norm,  (1, nstates)))
-        assert_array_almost_equal(hmmposteriors, gmmposteriors)
+        gmmstate_sequence = gmmposteriors.argmax(axis=1)
+        assert_array_equal(state_sequence, gmmstate_sequence)
+
+    def test_base_hmm_attributes(self):
+        nstates = 20
+        startprob = np.random.rand(nstates)
+        startprob = startprob / startprob.sum()
+        transmat = np.random.rand(nstates, nstates)
+        transmat /= np.tile(transmat.sum(axis=1)[:,np.newaxis], (1, nstates))
+
+        h = self.StubHMM(nstates)
+        
+        self.assertEquals(h.nstates, nstates)
+
+        h.startprob = startprob
+        assert_array_almost_equal(h.startprob, startprob)
+
+        self.assertRaises(ValueError, h.__setattr__, 'startprob',
+                          2 * startprob)
+        self.assertRaises(ValueError, h.__setattr__, 'startprob', [])
+        self.assertRaises(ValueError, h.__setattr__, 'startprob',
+                          np.zeros((nstates - 2, 2)))
+
+        h.transmat = transmat
+        assert_array_almost_equal(h.transmat, transmat)
+        self.assertRaises(ValueError, h.__setattr__, 'transmat',
+                          2 * transmat)
+        self.assertRaises(ValueError, h.__setattr__, 'transmat', [])
+        self.assertRaises(ValueError, h.__setattr__, 'transmat',
+                          np.zeros((nstates - 2, nstates)))
 
 
-class TestGaussianHMM(unittest.TestCase):
-    cvtypes = ['spherical', 'tied', 'diag', 'full']
-
-    nstates = 10
-    ndim = 4
+class GaussianHMMTester():
+    nstates = 5
+    ndim = 3
     startprob = np.random.rand(nstates)
     startprob = startprob / startprob.sum()
     transmat = np.random.rand(nstates, nstates)
     transmat /= np.tile(transmat.sum(axis=1)[:,np.newaxis], (1, nstates))
     means = np.random.randint(-20, 20, (nstates, ndim))
-    covars = {'spherical': (0.1 + 2 * np.random.rand(nstates))**2,
+    covars = {'spherical': (1.0 + 2 * np.random.rand(nstates))**2,
               'tied': _generate_random_spd_matrix(ndim),
-              'diag': (0.1 + 2 * np.random.rand(nstates, ndim))**2,
+              'diag': (1.0 + 2 * np.random.rand(nstates, ndim))**2,
               'full': np.array([_generate_random_spd_matrix(ndim)
                                 for x in xrange(nstates)])}
     def test_bad_cvtype(self):
-        for cvtype in self.cvtypes:
-            g = hmm._GaussianHMM(20, 1, cvtype)
+        h = hmm._GaussianHMM(20, 1, self.cvtype)
         self.assertRaises(ValueError, hmm.HMM, 20, 1, 'badcvtype')
 
-    def _test_attributes(self, cvtype):
-        g = hmm._GaussianHMM(self.nstates, self.ndim, cvtype)
+    def test_attributes(self):
+        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
 
-        self.assertEquals(g.emission_type, 'gaussian')
+        self.assertEquals(h.emission_type, 'gaussian')
         
-        self.assertEquals(g.nstates, self.nstates)
-        self.assertEquals(g.ndim, self.ndim)
-        self.assertEquals(g.cvtype, cvtype)
+        self.assertEquals(h.nstates, self.nstates)
+        self.assertEquals(h.ndim, self.ndim)
+        self.assertEquals(h.cvtype, self.cvtype)
 
-        g.startprob = self.startprob
-        assert_array_almost_equal(g.startprob, self.startprob)
-        self.assertRaises(ValueError, g.__setattr__, 'startprob',
+        h.startprob = self.startprob
+        assert_array_almost_equal(h.startprob, self.startprob)
+        self.assertRaises(ValueError, h.__setattr__, 'startprob',
                           2 * self.startprob)
-        self.assertRaises(ValueError, g.__setattr__, 'startprob', [])
-        self.assertRaises(ValueError, g.__setattr__, 'startprob',
+        self.assertRaises(ValueError, h.__setattr__, 'startprob', [])
+        self.assertRaises(ValueError, h.__setattr__, 'startprob',
                           np.zeros((self.nstates - 2, self.ndim)))
 
-        g.transmat = self.transmat
-        assert_array_almost_equal(g.transmat, self.transmat)
-        self.assertRaises(ValueError, g.__setattr__, 'transmat',
+        h.transmat = self.transmat
+        assert_array_almost_equal(h.transmat, self.transmat)
+        self.assertRaises(ValueError, h.__setattr__, 'transmat',
                           2 * self.transmat)
-        self.assertRaises(ValueError, g.__setattr__, 'transmat', [])
-        self.assertRaises(ValueError, g.__setattr__, 'transmat',
+        self.assertRaises(ValueError, h.__setattr__, 'transmat', [])
+        self.assertRaises(ValueError, h.__setattr__, 'transmat',
                           np.zeros((self.nstates - 2, self.nstates)))
 
-        g.means = self.means
-        assert_array_almost_equal(g.means, self.means)
-        self.assertRaises(ValueError, g.__setattr__, 'means', [])
-        self.assertRaises(ValueError, g.__setattr__, 'means',
+        h.means = self.means
+        assert_array_almost_equal(h.means, self.means)
+        self.assertRaises(ValueError, h.__setattr__, 'means', [])
+        self.assertRaises(ValueError, h.__setattr__, 'means',
                           np.zeros((self.nstates - 2, self.ndim)))
 
-        g.covars = self.covars[cvtype]
-        assert_array_almost_equal(g.covars, self.covars[cvtype])
-        self.assertRaises(ValueError, g.__setattr__, 'covars', [])
-        self.assertRaises(ValueError, g.__setattr__, 'covars',
+        h.covars = self.covars[self.cvtype]
+        assert_array_almost_equal(h.covars, self.covars[self.cvtype])
+        self.assertRaises(ValueError, h.__setattr__, 'covars', [])
+        self.assertRaises(ValueError, h.__setattr__, 'covars',
                           np.zeros((self.nstates - 2, self.ndim)))
 
-    def test_attributes_spherical(self):
-        self._test_attributes('spherical')
-    def test_attributes_tied(self):
-        self._test_attributes('tied')
-    def test_attributes_diag(self):
-        self._test_attributes('diag')
-    def test_attributes_full(self):
-        self._test_attributes('full')
-
-    def _test_eval(self, cvtype):
-        g = hmm._GaussianHMM(self.nstates, self.ndim, cvtype)
+    def test_eval_and_decode(self):
+        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
-        g.means = 20 * self.means
-        g.covars = self.covars[cvtype]
+        h.means = 20 * self.means
+        h.covars = self.covars[self.cvtype]
 
         gaussidx = np.repeat(range(self.nstates), 5)
         nobs = len(gaussidx)
-        obs = np.random.randn(nobs, self.ndim) + g.means[gaussidx]
+        obs = np.random.randn(nobs, self.ndim) + h.means[gaussidx]
 
-        ll, posteriors = g.eval(obs)
+        ll, posteriors = h.eval(obs)
 
-        self.assertEqual(len(ll), nobs)
         self.assertEqual(posteriors.shape, (nobs, self.nstates))
         assert_array_almost_equal(posteriors.sum(axis=1), np.ones(nobs))
-        assert_array_equal(posteriors.argmax(axis=1), gaussidx)
 
-    def test_eval_spherical(self):
-        self._test_eval('spherical')
-    def test_eval_tied(self):
-        self._test_eval('tied')
-    def test_eval_diag(self):
-        self._test_eval('diag')
-    def test_eval_full(self):
-        self._test_eval('full')
+        viterbi_ll, stateseq = h.decode(obs)
+        assert_array_equal(stateseq, gaussidx)
 
-    def _test_rvs(self, cvtype, n=1000):
-        g = hmm._GaussianHMM(self.nstates, self.ndim, cvtype)
+    def test_rvs(self, n=1000):
+        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
-        g.means = 20 * self.means
-        g.covars = np.maximum(self.covars[cvtype], 0.1)
-        g.startprob = self.startprob
+        h.means = 20 * self.means
+        h.covars = np.maximum(self.covars[self.cvtype], 0.1)
+        h.startprob = self.startprob
 
-        samples = g.rvs(n)
+        samples = h.rvs(n)
         self.assertEquals(samples.shape, (n, self.ndim))
 
-    def test_rvs_spherical(self):
-        self._test_rvs('spherical')
-    def test_rvs_tied(self):
-        self._test_rvs('tied')
-    def test_rvs_diag(self):
-        self._test_rvs('diag')
-    def test_rvs_full(self):
-        self._test_rvs('full')
-
-    def _test_train(self, cvtype):
-        g = hmm._GaussianHMM(self.nstates, self.ndim, cvtype)
-        g.startprob = self.startprob
-        g.means = self.means
-        g.covars = 20*self.covars[cvtype]
+    def test_train(self, params='stmc'):
+        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
+        h.startprob = self.startprob
+        tmp = self.transmat + np.diag(np.random.rand(self.nstates))
+        h.transmat = tmp / np.tile(tmp.sum(axis=1), (self.nstates, 1)).T
+        h.means = self.means
+        h.covars = 20*self.covars[self.cvtype]
 
         # Create a training and testing set by sampling from the same
         # distribution.
-        train_obs = g.rvs(n=200)
-        test_obs = g.rvs(n=20)
+        train_obs = [h.rvs(n=10) for x in xrange(50)]
+        test_obs = [h.rvs(n=10) for x in xrange(5)]
 
-        g.init(train_obs, minit='points')
-        init_testll = g.eval(test_obs)[0].sum()
+        h.init(train_obs, minit='points')
+        init_testll = [h.lpdf(x) for x in test_obs]
 
-        trainll = g.train(train_obs)
-        self.assert_(np.all(np.diff(trainll) > -1))
+        #print 'Test train: %s (%s)' % (cvtype, params)
+        trainll = h.train(train_obs, iter=5, params=params) #, verbose=True)
+        self.assert_(np.all(np.diff(trainll) > 1))
 
-        post_testll = g.eval(test_obs)[0].sum()
+        post_testll = [h.lpdf(x) for x in test_obs]
         self.assertTrue(post_testll > init_testll)
 
-    def test_train_spherical(self):
-        self._test_train('spherical')
-    def test_train_tied(self):
-        self._test_train('tied')
-    def test_train_diag(self):
-        self._test_train('diag')
-    def test_train_full(self):
-        self._test_train('full')
-        
+    def test_train_startprob_and_transmat(self):
+        self.test_train('st')
+
+
+class TestGaussianHMMWithSphericalCovars(unittest.TestCase, GaussianHMMTester):
+    cvtype = 'spherical'
+
+
+class TestGaussianHMMWithDiagonalCovars(unittest.TestCase, GaussianHMMTester):
+    cvtype = 'diag'
+
+
+class TestGaussianHMMWithTiedCovars(unittest.TestCase, GaussianHMMTester):
+    cvtype = 'tied'
+
+
+class TestGaussianHMMWithFullCovars(unittest.TestCase, GaussianHMMTester):
+    cvtype = 'full'
 
 if __name__ == '__main__':
     unittest.main()
