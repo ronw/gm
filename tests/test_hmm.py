@@ -12,6 +12,21 @@ import hmm
 
 np.random.seed(0)
 
+class TestHMM(unittest.TestCase):
+    def test_hmm(self):
+        h = hmm.HMM()
+
+    def test_gaussian_hmm(self):
+        h = hmm.HMM('gaussian')
+        self.assertEquals(h.emission_type, 'gaussian')
+        self.assertTrue(h.__class__, hmm._GaussianHMM)
+
+    def test_gmm_hmm(self):
+        h = hmm.HMM('gmm')
+        self.assertEquals(h.emission_type, 'gmm')
+        self.assertTrue(h.__class__, hmm._GMMHMM)
+
+
 class TestBaseHMM(unittest.TestCase):
     class StubHMM(hmm._BaseHMM):
         @property
@@ -20,6 +35,8 @@ class TestBaseHMM(unittest.TestCase):
         def _compute_obs_log_likelihood(self):
             pass
         def _generate_sample_from_state(self):
+            pass
+        def _init(self):
             pass
         def _init_sufficient_statistics(self):
             pass

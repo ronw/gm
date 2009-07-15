@@ -13,16 +13,12 @@ from gmm import _distribute_covar_matrix_to_match_cvtype, _validate_covars
 
 ZEROLOGPROB = -1e200
 
-#implemented_classes = [_GaussianHMM, _GMMHMM]
-#
-#def HMM(emission_type='gaussian', *args, **kwargs):
 def HMM(emission_type='gaussian', *args, **kwargs):
-
+    """Create an HMM object with the given emission_type."""
     supported_emission_types = dict([(x.emission_type, x)
                                      for x in _BaseHMM.__subclasses__()])
-                                     #for x in implemented_classes])
-    if emission_type == supported_emission_types.keys():
-        return suppoerted_emission_types[emission_type](*args, **kwargs)
+    if emission_type in supported_emission_types.keys():
+        return supported_emission_types[emission_type](*args, **kwargs)
     else:
         raise ValueError, 'Unknown emission_type'
 
@@ -39,12 +35,12 @@ class _BaseHMM(GenerativeModel):
     # forward-backward and Viterbi algorithms.  Subclasses need only
     # implement the abstractproperty emission_type, and the
     # abstractmethods _generate_sample_from_state(),
-    # _compute_obs_log_likelihood(), and _mstep() which depend on the
-    # specific emission distribution.
+    # _compute_obs_log_likelihood(), _init(), _init_sufficient_statistics(),
+    # _accumulate_sufficient_statistics(), and _mstep() which depend
+    # on the specific emission distribution.
     #
-    # Subclasses will probably also want to implement their own init()
-    # to initialize the emission distribution parameters (and any
-    # corresponding properties to expose the parameters publically).
+    # Subclasses will probably also want to implement properties for
+    # the emission distribution parameters to expose them publically.
 
     @abc.abstractproperty
     def emission_type(self):
@@ -53,7 +49,6 @@ class _BaseHMM(GenerativeModel):
 
     def __init__(self, nstates=1):
         self._nstates = nstates
-
         self.startprob = np.tile(1.0 / nstates, nstates)
         self.transmat = np.tile(1.0 / nstates, (nstates, nstates))
 
@@ -96,7 +91,6 @@ class _BaseHMM(GenerativeModel):
                                                     beamlogprob)
         bwdlattice = self._do_backward_pass(framelogprob, fwdlattice, maxrank,
                                             beamlogprob)
-
         gamma = fwdlattice + bwdlattice
         # gamma is guaranteed to be correctly normalized by logprob at
         # all frames, unless we do approximate inference using pruning.
@@ -228,11 +222,7 @@ class _BaseHMM(GenerativeModel):
         --------
         scipy.cluster.vq.kmeans2
         """
-        if 's' in params:
-            self.startprob = np.tile(1.0 / self._nstates, self._nstates)
-        if 't' in params:
-            shape = (self._nstates, self._nstates)
-            self.transmat = np.tile(1.0 / self._nstates, shape)
+        self._init(obs, params, **kwargs)
 
     def train(self, obs, iter=10, verbose=False, thresh=1e-2,
               params='stmc', maxrank=None, beamlogprob=-np.Inf, **kwargs):
@@ -370,8 +360,9 @@ class _BaseHMM(GenerativeModel):
         fwdlattice[0] = self._log_startprob + framelogprob[0]
         for n in xrange(1, nobs):
             idx = self._prune_states(fwdlattice[n-1], maxrank, beamlogprob)
-            pr = self._log_transmat[idx].T + fwdlattice[n-1,idx]
-            fwdlattice[n] = logsum(pr, axis=1) + framelogprob[n]
+            fwdlattice[n] = (logsum(self._log_transmat[idx].T
+                                    + fwdlattice[n-1,idx], axis=1)
+                             + framelogprob[n])
         fwdlattice[fwdlattice <= ZEROLOGPROB] = -np.Inf;
 
         return logsum(fwdlattice[-1]), fwdlattice
@@ -389,8 +380,9 @@ class _BaseHMM(GenerativeModel):
                                      -50)
                                      #beamlogprob)
                                      #-np.Inf)
-            pr = self._log_transmat[idx].T + bwdlattice[n,idx] + framelogprob[n,idx]
-            bwdlattice[n-1] = logsum(pr, axis=1)
+            bwdlattice[n-1] = logsum(self._log_transmat[idx].T
+                                     + bwdlattice[n,idx] + framelogprob[n,idx],
+                                     axis=1)
         bwdlattice[bwdlattice <= ZEROLOGPROB] = -np.Inf;
 
         return bwdlattice
@@ -432,6 +424,14 @@ class _BaseHMM(GenerativeModel):
     @abc.abstractmethod
     def _generate_sample_from_state(self, state):
         pass
+
+    @abc.abstractmethod
+    def _init(self, obs, params, **kwargs):
+        if 's' in params:
+            self.startprob = np.tile(1.0 / self._nstates, self._nstates)
+        if 't' in params:
+            shape = (self._nstates, self._nstates)
+            self.transmat = np.tile(1.0 / self._nstates, shape)
 
     @abc.abstractmethod
     def _init_sufficient_statistics(self):
@@ -514,18 +514,16 @@ class _GaussianHMM(_BaseHMM):
 
     See Also
     --------
-    model : Gaussian mixture model
+    gmm : Gaussian mixture model
     """
 
-    @property
-    def emission_type(self):
-        return 'gaussian'
+    emission_type = 'gaussian'
 
     def __init__(self, nstates=1, ndim=1, cvtype='diag'):
-        """Create a hidden Markov model
+        """Create a hidden Markov model.
 
-        Initializes parameters such that every state has
-        zero mean and identity covariance.
+        Initializes parameters such that every state has zero mean and
+        identity covariance.
 
         Parameters
         ----------
@@ -545,40 +543,6 @@ class _GaussianHMM(_BaseHMM):
         self.means = np.zeros((nstates, ndim))
         self.covars = _distribute_covar_matrix_to_match_cvtype(
             np.eye(ndim), cvtype, nstates)
-
-    def init(self, obs, params='stmc', **kwargs):
-        """Initialize model parameters from data using the k-means algorithm
-
-        Parameters
-        ----------
-        obs : array_like, shape (nobs, n, ndim)
-            List of ndim-dimensional data points.  Each row corresponds to a
-            single data point.
-        params : string
-            Controls which parameters are updated in the training
-            process.  Can contain any combination of 's' for startprob,
-            't' for transmat, 'm' for means, and 'c' for covars.
-            Defaults to 'stmc'.
-        **kwargs :
-            Keyword arguments to pass through to the k-means function 
-            (scipy.cluster.vq.kmeans2)
-
-        See Also
-        --------
-        scipy.cluster.vq.kmeans2
-        """
-
-        super(_GaussianHMM, self).init(obs, params=params)
-
-        if 'm' in params:
-            self._means, tmp = sp.cluster.vq.kmeans2(obs[0], self._nstates,
-                                                     **kwargs)
-        if 'c' in params:
-            cv = np.cov(obs[0].T)
-            if not cv.shape:
-                cv.shape = (1, 1)
-            self._covars = _distribute_covar_matrix_to_match_cvtype(
-                cv, self._cvtype, self._nstates)
 
     # Read-only properties.
     @property
@@ -626,6 +590,19 @@ class _GaussianHMM(_BaseHMM):
         else:
             cv = self._covars[state]
         return sample_gaussian(self._means[state], cv, self._cvtype)
+
+    def _init(self, obs, params='stmc', **kwargs):
+        super(_GaussianHMM, self)._init(obs, params=params)
+
+        if 'm' in params:
+            self._means, tmp = sp.cluster.vq.kmeans2(obs[0], self._nstates,
+                                                     **kwargs)
+        if 'c' in params:
+            cv = np.cov(obs[0].T)
+            if not cv.shape:
+                cv.shape = (1, 1)
+            self._covars = _distribute_covar_matrix_to_match_cvtype(
+                cv, self._cvtype, self._nstates)
 
     def _init_sufficient_statistics(self):
         stats = super(_GaussianHMM, self)._init_sufficient_statistics()
@@ -683,8 +660,7 @@ class _GaussianHMM(_BaseHMM):
                     elif self._cvtype == 'full':
                         self._covars[c] = cv
 
+
 class _GMMHMM(_BaseHMM):
-    @property
-    def emission_type(self):
-        return 'gaussian'
+    emission_type = 'gmm'
 
