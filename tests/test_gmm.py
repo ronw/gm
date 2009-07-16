@@ -46,6 +46,35 @@ class TestLogsum(unittest.TestCase):
             Asum = gmm.logsum(A, axis)
             assert_array_almost_equal(np.exp(Asum), np.sum(np.exp(A), axis))
 
+class TestNormalize(unittest.TestCase):
+    def test_normalize_1D(self):
+        A = np.random.rand(10) + 1.0
+        Anorm = gmm.normalize(A)
+        self.assertAlmostEqual(Anorm.sum(), 1.0)
+
+    def test_normalize_2D(self):
+        A = np.random.rand(10, 4) + 1.0
+        Anorm = gmm.normalize(A)
+        self.assertAlmostEqual(Anorm.sum(), 1.0)
+
+    def test_normalize_with_axis_1D(self):
+        A = np.random.rand(10) + 1.0
+        for axis in range(1):
+            Anorm = gmm.normalize(A, axis)
+            self.assertTrue(np.all(gmm.almost_equal(Anorm.sum(axis), 1.0)))
+
+    def test_normalize_with_axis_2D(self):
+        A = np.random.rand(10, 4) + 1.0
+        for axis in range(2):
+            Anorm = gmm.normalize(A, axis)
+            self.assertTrue(np.all(gmm.almost_equal(Anorm.sum(axis), 1.0)))
+
+    def test_normalize_with_axis_3D(self):
+        A = np.random.rand(10, 4, 5) + 1.0
+        for axis in range(3):
+            Anorm = gmm.normalize(A, axis)
+            self.assertTrue(np.all(gmm.almost_equal(Anorm.sum(axis), 1.0)))
+
 class TestSampleGaussian(unittest.TestCase):
     def _test_sample_gaussian_diag(self, ndim, n=10000):
         mu = np.random.randint(10) * np.random.rand(ndim)

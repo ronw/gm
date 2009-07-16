@@ -21,7 +21,6 @@ def HMM(emission_type='gaussian', *args, **kwargs):
     else:
         raise ValueError, 'Unknown emission_type'
 
-
 class _BaseHMM(GenerativeModel):
     """Hidden Markov Model abstract base class.
     
@@ -458,9 +457,7 @@ class _BaseHMM(GenerativeModel):
         if 's' in params:
             self.startprob = stats['start'] / stats['nobs']
         if 't' in params:
-            self.transmat = (stats['trans'] /
-                             np.tile(stats['trans'].sum(axis=1),
-                                     (self._nstates, 1)).T)
+            self.transmat = normalize(stats['trans'], axis=1)
 
 
 class _GaussianHMM(_BaseHMM):

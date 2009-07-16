@@ -32,6 +32,18 @@ def logsum(A, axis=None):
     Asum += Amax.reshape(Asum.shape)
     return Asum
 
+def normalize(A, axis=None):
+    Asum = A.sum(axis)
+    Anorm = Asum
+    if axis and A.ndim > 1:
+        shape = list(A.shape)
+        shape[axis] = 1
+        Asum.shape = shape
+        shape = np.ones(A.ndim)
+        shape[axis] = A.shape[axis]
+        Anorm = np.tile(Asum, shape)
+    return A / Anorm
+
 def lmvnpdf(obs, means, covars, cvtype='diag'):
     """Compute the log probability under a multivariate Gaussian distribution.
 
