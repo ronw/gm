@@ -147,6 +147,8 @@ class GMM(GenerativeModel):
             (`ndim`, `ndim`)            if 'tied',
             (`nstates`, `ndim`)         if 'diag',
             (`nstates`, `ndim`, `ndim`) if 'full'
+    labels : list, len `nstates`
+        Optional labels for each mixture component.
 
     Methods
     -------
@@ -207,6 +209,8 @@ class GMM(GenerativeModel):
         self.means = np.zeros((nstates, ndim))
         self.covars = _distribute_covar_matrix_to_match_cvtype(
             np.eye(ndim), cvtype, nstates)
+        
+        self.labels = [None] * nstates
 
     # Read-only properties.
     @property

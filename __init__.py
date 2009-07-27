@@ -23,5 +23,5 @@ __version__ = "0.1"
 
 from generative_model import GenerativeModel
 from gmm import lmvnpdf, logsum, normalize, GMM
-from hmm import HMM
+from hmm import HMM, GaussianHMM, GMMHMM
 

@@ -19,12 +19,12 @@ class TestHMM(unittest.TestCase):
     def test_gaussian_hmm(self):
         h = hmm.HMM('gaussian')
         self.assertEquals(h.emission_type, 'gaussian')
-        self.assertTrue(h.__class__, hmm._GaussianHMM)
+        self.assertTrue(h.__class__, hmm.GaussianHMM)
 
     def test_gmm_hmm(self):
         h = hmm.HMM('gmm')
         self.assertEquals(h.emission_type, 'gmm')
-        self.assertTrue(h.__class__, hmm._GMMHMM)
+        self.assertTrue(h.__class__, hmm.GMMHMM)
 
 
 class TestBaseHMM(unittest.TestCase):
@@ -223,11 +223,11 @@ class GaussianHMMTester():
               'full': np.array([_generate_random_spd_matrix(ndim)
                                 for x in xrange(nstates)])}
     def test_bad_cvtype(self):
-        h = hmm._GaussianHMM(20, 1, self.cvtype)
+        h = hmm.GaussianHMM(20, 1, self.cvtype)
         self.assertRaises(ValueError, hmm.HMM, 20, 1, 'badcvtype')
 
     def test_attributes(self):
-        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
+        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype)
 
         self.assertEquals(h.emission_type, 'gaussian')
         
@@ -264,7 +264,7 @@ class GaussianHMMTester():
                           np.zeros((self.nstates - 2, self.ndim)))
 
     def test_eval_and_decode(self):
-        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
+        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
         h.means = 20 * self.means
@@ -283,7 +283,7 @@ class GaussianHMMTester():
         assert_array_equal(stateseq, gaussidx)
 
     def test_rvs(self, n=1000):
-        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
+        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype)
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
         h.means = 20 * self.means
@@ -294,7 +294,7 @@ class GaussianHMMTester():
         self.assertEquals(samples.shape, (n, self.ndim))
 
     def test_train(self, params='stmc'):
-        h = hmm._GaussianHMM(self.nstates, self.ndim, self.cvtype)
+        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype)
         h.startprob = self.startprob
         tmp = self.transmat + np.diag(np.random.rand(self.nstates))
         h.transmat = tmp / np.tile(tmp.sum(axis=1), (self.nstates, 1)).T

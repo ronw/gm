@@ -24,7 +24,41 @@ def HMM(emission_type='gaussian', *args, **kwargs):
 class _BaseHMM(GenerativeModel):
     """Hidden Markov Model abstract base class.
     
-    See the instance documentation for details specific to a particular object.
+    Representation of a hidden Markov model probability distribution.
+    This class allows for easy evaluation of, sampling from, and
+    maximum-likelihood estimation of the parameters of a HMM.
+
+    See the instance documentation for details specific to a
+    particular object.
+
+    Attributes
+    ----------
+    nstates : int (read-only)
+        Number of states in the model.
+    transmat : array, shape (`nstates`, `nstates`)
+        Matrix of transition probabilities between states.
+    startprob : array, shape ('nstates`,)
+        Initial state occupation distribution.
+    labels : list, len `nstates`
+        Optional labels for each state.
+
+    Methods
+    -------
+    eval(obs)
+        Compute the log likelihood of `obs` under the HMM.
+    decode(obs)
+        Find most likely state sequence for each point in `obs` using the
+        Viterbi algorithm.
+    rvs(n=1)
+        Generate `n` samples from the HMM.
+    init(obs)
+        Initialize HMM parameters from `obs`.
+    train(obs)
+        Estimate HMM parameters from `obs` using the Baum-Welch algorithm.
+
+    See Also
+    --------
+    gmm : Gaussian mixture model
     """
     __metaclass__ = abc.ABCMeta
 
@@ -49,6 +83,7 @@ class _BaseHMM(GenerativeModel):
         self._nstates = nstates
         self.startprob = np.tile(1.0 / nstates, nstates)
         self.transmat = np.tile(1.0 / nstates, (nstates, nstates))
+        self.labels = [None] * nstates
 
     def eval(self, obs, maxrank=None, beamlogprob=-np.Inf):
         """Compute the log probability under the model and compute posteriors
@@ -460,7 +495,7 @@ class _BaseHMM(GenerativeModel):
             self.transmat = normalize(stats['trans'], axis=1)
 
 
-class _GaussianHMM(_BaseHMM):
+class GaussianHMM(_BaseHMM):
     """Hidden Markov Model with Gaussian emissions
 
     Representation of a hidden Markov model probability distribution.
@@ -489,6 +524,8 @@ class _GaussianHMM(_BaseHMM):
             (`ndim`, `ndim`)            if 'tied',
             (`nstates`, `ndim`)         if 'diag',
             (`nstates`, `ndim`, `ndim`) if 'full'
+    labels : list, len `nstates`
+        Optional labels for each state.
 
     Methods
     -------
@@ -506,7 +543,7 @@ class _GaussianHMM(_BaseHMM):
 
     Examples
     --------
-    >>> hmm = HMM(nstates=2, ndim=1)
+    >>> hmm = HMM('gaussian', nstates=2, ndim=1)
 
     See Also
     --------
@@ -533,7 +570,7 @@ class _GaussianHMM(_BaseHMM):
             Defaults to 'diag'.
         """
 
-        super(_GaussianHMM, self).__init__(nstates)
+        super(GaussianHMM, self).__init__(nstates)
         self._ndim = ndim
         self._cvtype = cvtype
         self.means = np.zeros((nstates, ndim))
@@ -588,7 +625,7 @@ class _GaussianHMM(_BaseHMM):
         return sample_gaussian(self._means[state], cv, self._cvtype)
 
     def _init(self, obs, params='stmc', **kwargs):
-        super(_GaussianHMM, self)._init(obs, params=params)
+        super(GaussianHMM, self)._init(obs, params=params)
 
         if 'm' in params:
             self._means, tmp = sp.cluster.vq.kmeans2(obs[0], self._nstates,
@@ -601,7 +638,7 @@ class _GaussianHMM(_BaseHMM):
                 cv, self._cvtype, self._nstates)
 
     def _init_sufficient_statistics(self):
-        stats = super(_GaussianHMM, self)._init_sufficient_statistics()
+        stats = super(GaussianHMM, self)._init_sufficient_statistics()
         stats['obs'] = np.zeros((self._nstates, self._ndim))
         if self._cvtype in ('spherical', 'diag'):
             stats['obs**2'] = np.zeros((self._nstates, self._ndim))
@@ -612,7 +649,7 @@ class _GaussianHMM(_BaseHMM):
 
     def _accumulate_sufficient_statistics(self, stats, obs, framelogprob,
                                           posteriors, fwdlattice, bwdlattice):
-        super(_GaussianHMM, self)._accumulate_sufficient_statistics(
+        super(GaussianHMM, self)._accumulate_sufficient_statistics(
             stats, obs, framelogprob, posteriors, fwdlattice, bwdlattice)
 
         w = posteriors.sum(axis=0)
@@ -629,7 +666,7 @@ class _GaussianHMM(_BaseHMM):
                     stats['obs.T*obs'][c] += posteriors[t,c] * obsTobs / w[c]
                     
     def _mstep(self, stats, params, min_covar=1.0, **kwargs):
-        super(_GaussianHMM, self)._mstep(stats, params)
+        super(GaussianHMM, self)._mstep(stats, params)
 
         if 'm' in params:
             self._means = stats['obs'] / stats['nobs']
@@ -657,6 +694,6 @@ class _GaussianHMM(_BaseHMM):
                         self._covars[c] = cv
 
 
-class _GMMHMM(_BaseHMM):
+class GMMHMM(_BaseHMM):
     emission_type = 'gmm'
 
