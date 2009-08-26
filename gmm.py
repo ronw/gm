@@ -243,7 +243,7 @@ class GMM(GenerativeModel):
         if not almost_equal(np.sum(weights), 1.0):
             raise ValueError, 'weights must sum to 1.0'
         
-        self._log_weights = np.log(np.array(weights).copy())
+        self._log_weights = np.log(np.asarray(weights).copy())
         #self._log_weights[np.isinf(self._log_weights)] = ZEROLOGPROB
 
     @property
@@ -253,7 +253,7 @@ class GMM(GenerativeModel):
 
     @means.setter
     def means(self, means):
-        means = np.array(means)
+        means = np.asarray(means)
         if means.shape != (self._nstates, self._ndim):
             raise ValueError, 'means must have shape (nstates, ndim)'
         self._means = means.copy()
@@ -265,9 +265,9 @@ class GMM(GenerativeModel):
 
     @covars.setter
     def covars(self, covars):
-        covars = np.array(covars)
+        covars = np.asarray(covars)
         _validate_covars(covars, self._cvtype, self._nstates, self._ndim)
-        self._covars = np.array(covars).copy()
+        self._covars = covars.copy()
     
     def eval(self, obs):
         """Evaluate the model on data
@@ -328,7 +328,7 @@ class GMM(GenerativeModel):
             Index of the most likelihod mixture components for each observation
         """
         logprob, posteriors = self.eval(obs)
-        return posteriors.argmax(axis=1)
+        return logprob, posteriors.argmax(axis=1)
         
     def rvs(self, n=1):
         """Generate random samples from the model.

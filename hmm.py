@@ -347,7 +347,7 @@ class _BaseHMM(GenerativeModel):
         if not almost_equal(np.sum(startprob), 1.0):
             raise ValueError, 'startprob must sum to 1.0'
         
-        self._log_startprob = np.log(np.array(startprob).copy())
+        self._log_startprob = np.log(np.asarray(startprob).copy())
 
     @property
     def transmat(self):
@@ -356,17 +356,17 @@ class _BaseHMM(GenerativeModel):
 
     @transmat.setter
     def transmat(self, transmat):
-        if np.array(transmat).shape != (self._nstates, self._nstates):
+        if np.asarray(transmat).shape != (self._nstates, self._nstates):
             raise ValueError, 'transmat must have shape (nstates, nstates)'
         if not np.all(almost_equal(np.sum(transmat, axis=1), 1.0)):
             raise ValueError, 'each row of transmat must sum to 1.0'
         
-        self._log_transmat = np.log(np.array(transmat).copy())
+        self._log_transmat = np.log(np.asarray(transmat).copy())
 
     def _do_viterbi_pass(self, framelogprob, maxrank=None, beamlogprob=-np.Inf):
         nobs = len(framelogprob)
         lattice = np.zeros((nobs, self._nstates))
-        traceback = np.zeros((nobs, self._nstates)) 
+        traceback = np.zeros((nobs, self._nstates), dtype=np.int) 
 
         lattice[0] = self._log_startprob + framelogprob[0]
         for n in xrange(1, nobs):
@@ -384,7 +384,7 @@ class _BaseHMM(GenerativeModel):
             s = frame[s]
 
         reverse_state_sequence.reverse()
-        return logsum(lattice[-1]), reverse_state_sequence
+        return logsum(lattice[-1]), np.array(reverse_state_sequence)
 
     def _do_forward_pass(self, framelogprob, maxrank=None, beamlogprob=-np.Inf):
         nobs = len(framelogprob)
@@ -598,7 +598,7 @@ class GaussianHMM(_BaseHMM):
 
     @means.setter
     def means(self, means):
-        means = np.array(means)
+        means = np.asarray(means)
         if means.shape != (self._nstates, self._ndim):
             raise ValueError, 'means must have shape (nstates, ndim)'
         self._means = means.copy()
@@ -610,9 +610,9 @@ class GaussianHMM(_BaseHMM):
 
     @covars.setter
     def covars(self, covars):
-        covars = np.array(covars)
+        covars = np.asarray(covars)
         _validate_covars(covars, self._cvtype, self._nstates, self._ndim)
-        self._covars = np.array(covars).copy()
+        self._covars = covars.copy()
 
     def _compute_obs_log_likelihood(self, obs):
         return lmvnpdf(obs, self._means, self._covars, self._cvtype)
