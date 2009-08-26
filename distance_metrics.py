@@ -28,21 +28,16 @@ def bhattacharyya_divergence(model1, model2, dist_type='jensen', norm=True):
         model1, model2 = model2, model1
 
     if isinstance(model1, gmm.GMM):
-        if dist_type == 'jensen':
-            fun = _gmm_compute_jensen_lower_bound
-        elif dist_type == 'variational':
-            fun = _gmm_compute_variational_lower_bound
-        else:
-            raise ValueError, 'Distance type ''%s'' not supported.' % dist_type
+        funcs = {'jensen': _gmm_compute_jensen_lower_bound,
+                 'variational': _gmm_compute_variational_lower_bound}
     elif isinstance(model1, hmm._BaseHMM):
-        if dist_type == 'jensen':
-            fun = _hmm_compute_jensen_lower_bound
-        elif dist_type == 'slowjensen':
-            fun = _hmm_compute_jensen_lower_bound_slow
-        elif dist_type == 'variational':
-            fun = _hmm_compute_variational_lower_bound
-        else:
-            raise ValueError, 'Distance type ''%s'' not supported.' % dist_type
+        funcs = {'jensen': _hmm_compute_jensen_lower_bound,
+                 'slowjensen': _hmm_compute_jensen_lower_bound_slow,
+                 'variational': _hmm_compute_variational_lower_bound}
+    try:
+        fun = funcs[dist_type]
+    except KeyError:
+        raise ValueError, 'Distance type ''%s'' not supported.' % dist_type
 
     Be12 = fun(model1, model2)
     if norm:
@@ -60,9 +55,12 @@ def _compute_pairwise_gaussian_distances(model1, model2):
     means2 = model2.means
     covars2 = model2.covars
 
-    if model1.cvtype == 'diag' and model2.cvtype == 'diag':
-        return _compute_pairwise_gaussian_distances_diag(means1, covars1,
-                                                         means2, covars2)
+    funcs = {'diag': _compute_pairwise_gaussian_distances_diag,
+             'full': _compute_pairwise_gaussian_distances_full}
+
+    if model1.cvtype == model2.cvtype:
+        return funcs[model1.cvtype](means1, covars1, means2, covars2)
+
 def _compute_pairwise_gaussian_distances_diag(means1, covars1, means2,
                                               covars2):
     n1 = len(means1)
@@ -78,7 +76,6 @@ def _compute_pairwise_gaussian_distances_diag(means1, covars1, means2,
 
 def _compute_pairwise_gaussian_distances_full(means1, covars1, means2,
                                               covars2):
-    print "UNINMPLEMENTED"
     n1 = len(means1)
     n2 = len(means2)
     Db = np.zeros((n1, n2))
@@ -86,10 +83,13 @@ def _compute_pairwise_gaussian_distances_full(means1, covars1, means2,
         for s2 in xrange(n2):
             mud = means2[s2] - means1[s1]
             cvs = covars2[s2] + covars1[s1]
-            Db[s1] = (np.dot(np.dot(mud.T, np.linalg.inv(cvs)), mud)
-                      + 2 * np.sum(np.log(cvs / 2), 1)) / 4
-            detcvp = (np.tile(np.sum(np.log(covars1), 1), (n2, 1)).T
-                      + np.tile(np.sum(np.log(covars2), 1), (n1, 1)))
+            Db[s1,s2] = (np.dot(np.dot(mud.T, np.linalg.inv(cvs)), mud)
+                         + 2 * np.log(np.linalg.det(cvs / 2))) / 4
+            
+    dets1 = np.asarray([np.linalg.det(x) for x in covars1])
+    dets2 = np.asarray([np.linalg.det(x) for x in covars2])
+    detcvp = np.log(np.outer(dets1, dets2))
+
     return Db - detcvp / 4
 
 def _gmm_compute_jensen_lower_bound(gmm1, gmm2):
