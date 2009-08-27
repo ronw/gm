@@ -1,5 +1,6 @@
 import abc
 import itertools
+import logging
 import time
 
 import numpy as np
@@ -11,6 +12,8 @@ from gmm import *
 from gmm import _distribute_covar_matrix_to_match_cvtype, _validate_covars
 
 ZEROLOGPROB = -1e200
+
+log = logging.getLogger('gm.hmm')
 
 def HMM(emission_type='gaussian', *args, **kwargs):
     """Create an HMM object with the given emission_type."""
@@ -257,8 +260,8 @@ class _BaseHMM(GenerativeModel):
         """
         self._init(obs, params, **kwargs)
 
-    def train(self, obs, iter=10, verbose=False, thresh=1e-2,
-              params='stmc', maxrank=None, beamlogprob=-np.Inf, **kwargs):
+    def train(self, obs, iter=10, thresh=1e-2, params='stmc', maxrank=None,
+              beamlogprob=-np.Inf, **kwargs):
         """Estimate model parameters with the Baum-Welch algorithm.
 
         Parameters
@@ -268,8 +271,6 @@ class _BaseHMM(GenerativeModel):
             single data point.
         iter : int
             Number of iterations to perform.
-        verbose : bool
-            Flag to toggle verbose progress reports.  Defaults to False.
         thresh : float
             Convergence threshold.
         params : string
@@ -314,16 +315,14 @@ class _BaseHMM(GenerativeModel):
                                                        bwdlattice)
             logprob.append(curr_logprob)
 
-            if verbose:
-                currT = time.time()
-                print ('Iteration %d: log likelihood = %f (took %f seconds).'
-                       % (i, logprob[-1], currT - T))
-                T = currT
+            currT = time.time()
+            log.info('Iteration %d: log likelihood = %f (took %f seconds).'
+                      % (i, logprob[-1], currT - T))
+            T = currT
 
             # Check for convergence.
             if i > 0 and abs(logprob[-1] - logprob[-2]) < thresh:
-                if verbose:
-                    print 'Converged at iteration %d.' % i
+                log.info('Converged at iteration %d.' % i)
                 break
 
             # Maximization step

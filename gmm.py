@@ -1,4 +1,5 @@
 import itertools
+import logging
 import time
 
 import numpy as np
@@ -8,6 +9,8 @@ import scipy.cluster
 from generative_model import GenerativeModel
 
 ZEROLOGPROB = -1e200
+
+log = logging.getLogger('gm.gmm')
 
 def almost_equal(actual, desired, decimal=7):
     """Check that two floats are approximately equal."""
@@ -390,8 +393,7 @@ class GMM(GenerativeModel):
             self._covars = _distribute_covar_matrix_to_match_cvtype(
                 cv, self._cvtype, self._nstates)
 
-    def train(self, obs, iter=10, min_covar=1.0, verbose=False, thresh=1e-2,
-              params='wmc'):
+    def train(self, obs, iter=10, min_covar=1.0, thresh=1e-2, params='wmc'):
         """Estimate model parameters with the expectation-maximization
         algorithm.
 
@@ -405,8 +407,6 @@ class GMM(GenerativeModel):
         min_covar : float
             Floor on the diagonal of the covariance matrix to prevent
             overfitting.  Defaults to 1.0.
-        verbose : bool
-            Flag to toggle verbose progress reports.  Defaults to False.
         thresh : float
             Convergence threshold.
         params : string
@@ -434,16 +434,15 @@ class GMM(GenerativeModel):
             curr_logprob, posteriors = self.eval(obs)
             logprob.append(curr_logprob.sum())
 
-            if verbose:
-                currT = time.time()
-                print ('Iteration %d: log likelihood = %f (took %f seconds).'
-                       % (i, logprob[-1], currT - T))
-                T = currT
+            currT = time.time()
+            log.info('Iteration %d: log likelihood = %f (took %f seconds).'
+                      % (i, logprob[-1], currT - T))
+            T = currT
+
 
             # Check for convergence.
             if i > 0 and abs(logprob[-1] - logprob[-2]) < thresh:
-                if verbose:
-                    print 'Converged at iteration %d.' % i
+                log.info('Converged at iteration %d.' % i)
                 break
 
             # Maximization step
