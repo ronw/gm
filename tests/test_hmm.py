@@ -32,7 +32,7 @@ class TestBaseHMM(unittest.TestCase):
         @property
         def emission_type(self):
             return "none"
-        def _compute_obs_log_likelihood(self):
+        def _compute_log_likelihood(self):
             pass
         def _generate_sample_from_state(self):
             pass
@@ -42,7 +42,7 @@ class TestBaseHMM(unittest.TestCase):
             pass
         def _accumulate_sufficient_statistics(self):
             pass
-        def _mstep(self):
+        def _do_mstep(self):
             pass
     
     def test_prune_states_no_pruning(self):
@@ -68,7 +68,7 @@ class TestBaseHMM(unittest.TestCase):
         refidx, = np.nonzero(lattice_frame >= -beamlogprob)
         assert_array_equal(idx, refidx)
 
-    def _setup_example_hmm(self):
+    def setup_example_hmm(self):
         # Example from http://en.wikipedia.org/wiki/Forward-backward_algorithm
         h = self.StubHMM(2)
         h.transmat = [[0.7, 0.3], [0.3, 0.7]]
@@ -79,11 +79,21 @@ class TestBaseHMM(unittest.TestCase):
                                [0.9, 0.2],
                                [0.9, 0.2]])
         # Add dummy observations to stub.
-        h._compute_obs_log_likelihood = lambda obs: framelogprob
+        h._compute_log_likelihood = lambda obs: framelogprob
         return h, framelogprob
 
+    def test_init(self):
+        h, framelogprob = self.setup_example_hmm()
+
+        for params in [('transmat',), ('startprob', 'transmat')]:
+            d = dict((x, getattr(h, x)) for x in params)
+            h2 = self.StubHMM(h.nstates, **d)
+            self.assertEqual(h.nstates, h2.nstates)
+            for p in params:
+                assert_array_almost_equal(getattr(h, p), getattr(h2, p))
+
     def test_do_forward_pass(self):
-        h, framelogprob = self._setup_example_hmm()
+        h, framelogprob = self.setup_example_hmm()
 
         logprob, fwdlattice = h._do_forward_pass(framelogprob)
 
@@ -98,7 +108,7 @@ class TestBaseHMM(unittest.TestCase):
         assert_array_almost_equal(np.exp(fwdlattice), reffwdlattice, 4)
 
     def test_do_backward_pass(self):
-        h, framelogprob = self._setup_example_hmm()
+        h, framelogprob = self.setup_example_hmm()
 
         fakefwdlattice = np.zeros((len(framelogprob), 2))
         bwdlattice = h._do_backward_pass(framelogprob, fakefwdlattice)
@@ -111,7 +121,7 @@ class TestBaseHMM(unittest.TestCase):
         assert_array_almost_equal(np.exp(bwdlattice), refbwdlattice, 4)
 
     def test_do_viterbi_pass(self):
-        h, framelogprob = self._setup_example_hmm()
+        h, framelogprob = self.setup_example_hmm()
 
         logprob, state_sequence = h._do_viterbi_pass(framelogprob)
 
@@ -122,7 +132,7 @@ class TestBaseHMM(unittest.TestCase):
         self.assertAlmostEqual(logprob, reflogprob, places=4)
 
     def test_eval(self):
-        h, framelogprob = self._setup_example_hmm()
+        h, framelogprob = self.setup_example_hmm()
         nobs = len(framelogprob)
 
         logprob, posteriors = h.eval([])
@@ -146,7 +156,7 @@ class TestBaseHMM(unittest.TestCase):
 
         # Add dummy observations to stub.
         framelogprob = np.log(np.random.rand(nobs, nstates))
-        h._compute_obs_log_likelihood = lambda obs: framelogprob
+        h._compute_log_likelihood = lambda obs: framelogprob
 
         # If startprob and transmat are uniform across all states (the
         # default), the transitions are uninformative - the model
@@ -167,7 +177,7 @@ class TestBaseHMM(unittest.TestCase):
 
         # Add dummy observations to stub.
         framelogprob = np.log(np.random.rand(nobs, nstates))
-        h._compute_obs_log_likelihood = lambda obs: framelogprob
+        h._compute_log_likelihood = lambda obs: framelogprob
 
         # If startprob and transmat are uniform across all states (the
         # default), the transitions are uninformative - the model
@@ -264,11 +274,11 @@ class GaussianHMMTester():
                           np.zeros((self.nstates - 2, self.ndim)))
 
     def test_eval_and_decode(self):
-        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype)
+        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
+                            means=self.means, covars=self.covars[self.cvtype])
         # Make sure the means are far apart so posteriors.argmax()
         # picks the actual component used to generate the observations.
-        h.means = 20 * self.means
-        h.covars = self.covars[self.cvtype]
+        h.means = 20 * h.means
 
         gaussidx = np.repeat(range(self.nstates), 5)
         nobs = len(gaussidx)
@@ -309,19 +319,28 @@ class GaussianHMMTester():
         h.init(train_obs, minit='points')
         init_testll = [h.lpdf(x) for x in test_obs]
 
-        #print 'Test train: %s (%s)' % (cvtype, params)
-        trainll = h.train(train_obs, iter=5, params=params) #, verbose=True)
-        self.assert_(np.all(np.diff(trainll) > 1))
+        trainll = h.train(train_obs, iter=5, params=params)
+        if not np.all(np.diff(trainll) > -0.5):
+            print
+            print 'Test train: %s (%s)\n  %s' % (self.cvtype, params, trainll)
+        self.assertTrue(np.all(np.diff(trainll) > -0.5))
 
         post_testll = [h.lpdf(x) for x in test_obs]
+        if not (post_testll > init_testll):
+            print
+            print 'Test train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
+                                                       init_testll, post_testll)
         self.assertTrue(post_testll > init_testll)
-
-    def test_train_startprob_and_transmat(self):
-        self.test_train('st')
 
 
 class TestGaussianHMMWithSphericalCovars(unittest.TestCase, GaussianHMMTester):
     cvtype = 'spherical'
+
+    def test_train_startprob_and_transmat(self):
+        self.test_train('st')
+
+    def test_train_means(self):
+        self.test_train('m')
 
 
 class TestGaussianHMMWithDiagonalCovars(unittest.TestCase, GaussianHMMTester):
@@ -334,6 +353,70 @@ class TestGaussianHMMWithTiedCovars(unittest.TestCase, GaussianHMMTester):
 
 class TestGaussianHMMWithFullCovars(unittest.TestCase, GaussianHMMTester):
     cvtype = 'full'
+
+
+class GaussianHMMMAPTrainerTester(GaussianHMMTester):
+    def test_train(self, params='stmc'):
+        priorhmm = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
+                                   means = 0.5 * self.means)
+        trainer = hmm.hmm_trainers.GaussianHMMMAPTrainer(priorhmm)
+        h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
+                            trainer=trainer)
+        h.startprob = self.startprob
+        tmp = self.transmat + np.diag(np.random.rand(self.nstates))
+        h.transmat = tmp / np.tile(tmp.sum(axis=1), (self.nstates, 1)).T
+        h.means = self.means
+        h.covars = 20*self.covars[self.cvtype]
+
+        # Create a training and testing set by sampling from the same
+        # distribution.
+        train_obs = [h.rvs(n=10) for x in xrange(50)]
+        test_obs = [h.rvs(n=10) for x in xrange(5)]
+
+        h.init(train_obs, minit='points')
+        init_testll = [h.lpdf(x) for x in test_obs]
+
+        trainll = h.train(train_obs, iter=5, params=params)
+        if not np.all(np.diff(trainll) > -0.5):
+            print
+            print 'Test MAP train: %s (%s)\n  %s' % (self.cvtype, params,
+                                                     trainll)
+        self.assertTrue(np.all(np.diff(trainll[1:]) > -0.5))
+
+        post_testll = [h.lpdf(x) for x in test_obs]
+        if not (post_testll > init_testll):
+            print
+            print 'Test MAP train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
+                                                           init_testll,
+                                                           post_testll)
+        self.assertTrue(post_testll > init_testll)
+
+
+class TestGaussianHMMMAPTrainerWithSphericalCovars(unittest.TestCase,
+                                                   GaussianHMMMAPTrainerTester):
+    cvtype = 'spherical'
+
+    def test_train_startprob_and_transmat(self):
+        self.test_train('st')
+
+    def test_train_means(self):
+        self.test_train('m')
+
+
+class TestGaussianHMMMAPTrainerWithDiagonalCovars(unittest.TestCase,
+                                                   GaussianHMMMAPTrainerTester):
+    cvtype = 'diag'
+
+
+class TestGaussianHMMMAPTrainerWithTiedCovars(unittest.TestCase,
+                                              GaussianHMMMAPTrainerTester):
+    cvtype = 'tied'
+
+
+class TestGaussianHMMMAPTrainerWithFullCovars(unittest.TestCase,
+                                              GaussianHMMMAPTrainerTester):
+    cvtype = 'full'
+
 
 if __name__ == '__main__':
     unittest.main()

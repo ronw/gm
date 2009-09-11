@@ -1,4 +1,5 @@
 import abc
+import functools
 import itertools
 import logging
 import time
@@ -10,6 +11,7 @@ import scipy.cluster
 from generative_model import GenerativeModel
 from gmm import *
 from gmm import _distribute_covar_matrix_to_match_cvtype, _validate_covars
+import hmm_trainers
 
 ZEROLOGPROB = -1e200
 
@@ -23,6 +25,7 @@ def HMM(emission_type='gaussian', *args, **kwargs):
         return supported_emission_types[emission_type](*args, **kwargs)
     else:
         raise ValueError, 'Unknown emission_type'
+    
 
 class _BaseHMM(GenerativeModel):
     """Hidden Markov Model abstract base class.
@@ -70,9 +73,9 @@ class _BaseHMM(GenerativeModel):
     # forward-backward and Viterbi algorithms.  Subclasses need only
     # implement the abstractproperty emission_type, and the
     # abstractmethods _generate_sample_from_state(),
-    # _compute_obs_log_likelihood(), _init(), _init_sufficient_statistics(),
-    # _accumulate_sufficient_statistics(), and _mstep() which depend
-    # on the specific emission distribution.
+    # _compute_log_likelihood(), _init(), and a corresponding
+    # HMMTrainer instance, all of which depend on the specific
+    # emission distribution.
     #
     # Subclasses will probably also want to implement properties for
     # the emission distribution parameters to expose them publically.
@@ -82,11 +85,23 @@ class _BaseHMM(GenerativeModel):
         """String identifier for the emission distribution used by this HMM"""
         pass
 
-    def __init__(self, nstates=1):
+    def __init__(self, nstates=1, startprob=None, transmat=None,
+        labels=None, trainer=hmm_trainers.BaseHMMBaumWelchTrainer()):
         self._nstates = nstates
-        self.startprob = np.tile(1.0 / nstates, nstates)
-        self.transmat = np.tile(1.0 / nstates, (nstates, nstates))
-        self.labels = [None] * nstates
+
+        if startprob is None:
+            startprob = np.tile(1.0 / nstates, nstates)
+        self.startprob = startprob
+
+        if transmat is None:
+            transmat = np.tile(1.0 / nstates, (nstates, nstates))
+        self.transmat = transmat
+
+        if labels is None:
+            labels = [None] * nstates
+        self.labels = labels
+
+        self.trainer = trainer
 
     def eval(self, obs, maxrank=None, beamlogprob=-np.Inf):
         """Compute the log probability under the model and compute posteriors
@@ -122,7 +137,7 @@ class _BaseHMM(GenerativeModel):
         lpdf : Compute the log probability under the model
         decode : Find most likely state sequence corresponding to a `obs`
         """
-        framelogprob = self._compute_obs_log_likelihood(obs)
+        framelogprob = self._compute_log_likelihood(obs)
         logprob, fwdlattice = self._do_forward_pass(framelogprob, maxrank,
                                                     beamlogprob)
         bwdlattice = self._do_backward_pass(framelogprob, fwdlattice, maxrank,
@@ -132,7 +147,6 @@ class _BaseHMM(GenerativeModel):
         # all frames, unless we do approximate inference using pruning.
         # So, we will normalize each frame explicitly in case we
         # pruned too aggressively.
-        #posteriors = np.exp(gamma - logprob)
         posteriors = np.exp(gamma.T - logsum(gamma, axis=1)).T
         return logprob, posteriors
 
@@ -164,7 +178,7 @@ class _BaseHMM(GenerativeModel):
         eval : Compute the log probability under the model and compute posteriors
         decode : Find most likely state sequence corresponding to a `obs`
         """
-        framelogprob = self._compute_obs_log_likelihood(obs)
+        framelogprob = self._compute_log_likelihood(obs)
         logprob, fwdlattice =  self._do_forward_pass(framelogprob, maxrank,
                                                      beamlogprob)
         return logprob
@@ -201,7 +215,7 @@ class _BaseHMM(GenerativeModel):
         eval : Compute the log probability under the model and compute posteriors
         lpdf : Compute the log probability under the model
         """
-        framelogprob = self._compute_obs_log_likelihood(obs)
+        framelogprob = self._compute_log_likelihood(obs)
         logprob, state_sequence = self._do_viterbi_pass(framelogprob, maxrank,
                                                         beamlogprob)
         return logprob, state_sequence
@@ -242,9 +256,8 @@ class _BaseHMM(GenerativeModel):
 
         Parameters
         ----------
-        obs : array_like, shape (nobs, n, ndim)
-            List of ndim-dimensional data points.  Each row corresponds to a
-            single data point.
+        obs : list
+            List of array-like observation sequences (shape (n_i, ndim)).
         params : string
             Controls which parameters are updated in the training
             process.  Can contain any combination of 's' for startprob,
@@ -260,15 +273,14 @@ class _BaseHMM(GenerativeModel):
         """
         self._init(obs, params, **kwargs)
 
-    def train(self, obs, iter=10, thresh=1e-2, params='stmc', maxrank=None,
-              beamlogprob=-np.Inf, **kwargs):
+    def train(self, obs, iter=10, thresh=1e-2, params='stmpc',
+              maxrank=None, beamlogprob=-np.Inf, **kwargs):
         """Estimate model parameters with the Baum-Welch algorithm.
 
         Parameters
         ----------
-        obs : array_like, shape (nobs, n, ndim)
-            List of ndim-dimensional data points.  Each row corresponds to a
-            single data point.
+        obs : list
+            List of array-like observation sequences (shape (n_i, ndim)).
         iter : int
             Number of iterations to perform.
         thresh : float
@@ -276,58 +288,25 @@ class _BaseHMM(GenerativeModel):
         params : string
             Controls which parameters are updated in the training
             process.  Can contain any combination of 's' for startprob,
-            't' for transmat, 'm' for means, and 'c' for covars.
-            Defaults to 'stmc'.
+            't' for transmat, 'm' for means, and 'c' for covars, etc.
+            Defaults to all parameters ('stmpc').
         maxrank : int
             Maximum rank to evaluate for rank pruning.  If not None,
             only consider the top `maxrank` states in the inner
             sum of the forward algorithm recursion.  Defaults to None
-            (no rank pruning).  See The HTK Book for more details.
+            (no rank pruning).  See "The HTK Book" for more details.
         beamlogprob : float
             Width of the beam-pruning beam in log-probability units.
-            Defaults to -numpy.Inf (no beam pruning).  See The HTK
-            Book for more details.
+            Defaults to -numpy.Inf (no beam pruning).  See "The HTK
+            Book" for more details.
 
         Returns
         -------
         logprob : list
             Log probabilities of each data point in `obs` for each iteration
         """
-
-        T = time.time()
-        logprob = []
-        for i in xrange(iter):
-            # Expectation step
-            stats = self._init_sufficient_statistics()
-            curr_logprob = 0
-            for seq in obs:
-                framelogprob = self._compute_obs_log_likelihood(seq)
-                lpr, fwdlattice = self._do_forward_pass(framelogprob, maxrank,
-                                                        beamlogprob)
-                bwdlattice = self._do_backward_pass(framelogprob, fwdlattice,
-                                                    maxrank, beamlogprob)
-                gamma = fwdlattice + bwdlattice
-                posteriors = np.exp(gamma.T - logsum(gamma, axis=1)).T
-
-                curr_logprob += lpr
-                self._accumulate_sufficient_statistics(stats, seq, framelogprob,
-                                                       posteriors, fwdlattice,
-                                                       bwdlattice)
-            logprob.append(curr_logprob)
-
-            currT = time.time()
-            log.info('Iteration %d: log likelihood = %f (took %f seconds).'
-                      % (i, logprob[-1], currT - T))
-            T = currT
-
-            # Check for convergence.
-            if i > 0 and abs(logprob[-1] - logprob[-2]) < thresh:
-                log.info('Converged at iteration %d.' % i)
-                break
-
-            # Maximization step
-            self._mstep(stats, params, **kwargs)
-        return logprob
+        return self.trainer.train(self, obs, iter, thresh, params,
+                                  maxrank, beamlogprob, **kwargs)
 
     @property
     def nstates(self):
@@ -450,7 +429,7 @@ class _BaseHMM(GenerativeModel):
         return state_idx
 
     @abc.abstractmethod
-    def _compute_obs_log_likelihood(self, obs):
+    def _compute_log_likelihood(self, obs):
         pass
     
     @abc.abstractmethod
@@ -464,34 +443,6 @@ class _BaseHMM(GenerativeModel):
         if 't' in params:
             shape = (self._nstates, self._nstates)
             self.transmat = np.tile(1.0 / self._nstates, shape)
-
-    @abc.abstractmethod
-    def _init_sufficient_statistics(self):
-        stats = {'nobs': 0,
-                 'start': np.zeros(self._nstates),
-                 'trans': np.zeros((self._nstates, self._nstates))}
-        return stats
-
-    @abc.abstractmethod
-    def _accumulate_sufficient_statistics(self, stats, seq, framelogprob, 
-                                         posteriors, fwdlattice, bwdlattice):
-        stats['nobs'] += 1
-        stats['start'] += posteriors[0]
-
-        zeta = np.zeros((self._nstates, self._nstates))
-        for t in xrange(len(framelogprob) - 1):
-            zeta = (np.tile(fwdlattice[t], (self._nstates, 1)).T
-                    + self._log_transmat.T
-                    + np.tile(framelogprob[t + 1] + bwdlattice[t + 1],
-                              (self._nstates, 1)))
-            stats['trans'] += np.exp(zeta - logsum(zeta))
-
-    @abc.abstractmethod
-    def _mstep(self, stats, params, **kwargs):
-        if 's' in params:
-            self.startprob = stats['start'] / stats['nobs']
-        if 't' in params:
-            self.transmat = normalize(stats['trans'], axis=1)
 
 
 class GaussianHMM(_BaseHMM):
@@ -551,8 +502,11 @@ class GaussianHMM(_BaseHMM):
 
     emission_type = 'gaussian'
 
-    def __init__(self, nstates=1, ndim=1, cvtype='diag'):
-        """Create a hidden Markov model.
+    def __init__(self, nstates=1, ndim=1, cvtype='diag',
+                 startprob=None, transmat=None, labels=None,
+                 means=None, covars=None,
+                 trainer=hmm_trainers.GaussianHMMBaumWelchTrainer()):
+        """Create a hidden Markov model with Gaussian emissions.
 
         Initializes parameters such that every state has zero mean and
         identity covariance.
@@ -568,13 +522,22 @@ class GaussianHMM(_BaseHMM):
             use.  Must be one of 'spherical', 'tied', 'diag', 'full'.
             Defaults to 'diag'.
         """
+        super(GaussianHMM, self).__init__(nstates, startprob,
+                                          transmat, labels, trainer)
 
-        super(GaussianHMM, self).__init__(nstates)
         self._ndim = ndim
         self._cvtype = cvtype
-        self.means = np.zeros((nstates, ndim))
-        self.covars = _distribute_covar_matrix_to_match_cvtype(
-            np.eye(ndim), cvtype, nstates)
+
+        if means is None:
+            means = np.zeros((nstates, ndim))
+        self.means = means
+
+        if covars is None:
+            covars = _distribute_covar_matrix_to_match_cvtype(np.eye(ndim),
+                                                              cvtype, nstates)
+        self.covars = covars
+
+        self.trainer = trainer
 
     # Read-only properties.
     @property
@@ -613,7 +576,7 @@ class GaussianHMM(_BaseHMM):
         _validate_covars(covars, self._cvtype, self._nstates, self._ndim)
         self._covars = covars.copy()
 
-    def _compute_obs_log_likelihood(self, obs):
+    def _compute_log_likelihood(self, obs):
         return lmvnpdf(obs, self._means, self._covars, self._cvtype)
 
     def _generate_sample_from_state(self, state):
@@ -636,63 +599,6 @@ class GaussianHMM(_BaseHMM):
             self._covars = _distribute_covar_matrix_to_match_cvtype(
                 cv, self._cvtype, self._nstates)
 
-    def _init_sufficient_statistics(self):
-        stats = super(GaussianHMM, self)._init_sufficient_statistics()
-        stats['obs'] = np.zeros((self._nstates, self._ndim))
-        if self._cvtype in ('spherical', 'diag'):
-            stats['obs**2'] = np.zeros((self._nstates, self._ndim))
-        elif self._cvtype in ('tied', 'full'):
-            stats['obs.T*obs'] = np.zeros((self._nstates, self._ndim,
-                                           self._ndim))
-        return stats
-
-    def _accumulate_sufficient_statistics(self, stats, obs, framelogprob,
-                                          posteriors, fwdlattice, bwdlattice):
-        super(GaussianHMM, self)._accumulate_sufficient_statistics(
-            stats, obs, framelogprob, posteriors, fwdlattice, bwdlattice)
-
-        w = posteriors.sum(axis=0)
-        norm = np.tile(1.0 / w, (self._ndim, 1)).T
-
-        stats['obs'] += np.dot(posteriors.T, obs) * norm
-
-        if self._cvtype in ('spherical', 'diag'):
-            stats['obs**2'] += np.dot(posteriors.T, obs**2) * norm
-        elif self._cvtype in ('tied', 'full'):
-            for t, o in enumerate(obs):
-                obsTobs = np.outer(o, o)
-                for c in xrange(self._nstates):
-                    stats['obs.T*obs'][c] += posteriors[t,c] * obsTobs / w[c]
-                    
-    def _mstep(self, stats, params, min_covar=1.0, **kwargs):
-        super(GaussianHMM, self)._mstep(stats, params)
-
-        if 'm' in params:
-            self._means = stats['obs'] / stats['nobs']
-
-        if 'c' in params:
-            if self._cvtype in ('spherical', 'diag'):
-                cv = (stats['obs**2'] / stats['nobs']
-                      - 2 * self._means * stats['obs'] / stats['nobs']
-                      + self._means ** 2 + min_covar)
-                if self._cvtype == 'spherical':
-                    self._covars = cv.mean(axis=1)
-                elif self._cvtype == 'diag':
-                    self._covars = cv
-            elif self._cvtype in ('tied', 'full'):
-                self._covars[:] = 0
-                for c in xrange(self._nstates):
-                    cv = (stats['obs.T*obs'][c] / stats['nobs']
-                          - 2 * np.outer(stats['obs'][c] / stats['nobs'],
-                                         self._means[c])
-                          + np.outer(self._means[c], self._means[c])
-                          + min_covar * np.eye(self._ndim))
-                    if self._cvtype == 'tied':
-                        self._covars += cv / self._nstates
-                    elif self._cvtype == 'full':
-                        self._covars[c] = cv
-
 
 class GMMHMM(_BaseHMM):
     emission_type = 'gmm'
-
