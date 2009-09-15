@@ -10,7 +10,13 @@ from test_gmm import _generate_random_spd_matrix
 
 import hmm
 
+#import logging
+#logging.basicConfig(level=logging.INFO,
+#                    datefmt="%Y-%m-%d %H:%M:%S",
+#                    format="%(asctime)s:%(levelname)s:%(message)s")
+
 np.random.seed(0)
+
 
 class TestHMM(unittest.TestCase):
     def test_hmm(self):
@@ -29,20 +35,12 @@ class TestHMM(unittest.TestCase):
 
 class TestBaseHMM(unittest.TestCase):
     class StubHMM(hmm._BaseHMM):
-        @property
-        def emission_type(self):
-            return "none"
+        emission_type = None
         def _compute_log_likelihood(self):
             pass
         def _generate_sample_from_state(self):
             pass
         def _init(self):
-            pass
-        def _init_sufficient_statistics(self):
-            pass
-        def _accumulate_sufficient_statistics(self):
-            pass
-        def _do_mstep(self):
             pass
     
     def test_prune_states_no_pruning(self):
@@ -219,7 +217,7 @@ class TestBaseHMM(unittest.TestCase):
                           np.zeros((nstates - 2, nstates)))
 
 
-class GaussianHMMTester():
+class GaussianHMMParams(object):
     nstates = 5
     ndim = 3
     startprob = np.random.rand(nstates)
@@ -228,10 +226,13 @@ class GaussianHMMTester():
     transmat /= np.tile(transmat.sum(axis=1)[:,np.newaxis], (1, nstates))
     means = np.random.randint(-20, 20, (nstates, ndim))
     covars = {'spherical': (1.0 + 2 * np.random.rand(nstates))**2,
-              'tied': _generate_random_spd_matrix(ndim),
+              'tied': _generate_random_spd_matrix(ndim) + np.eye(ndim),
               'diag': (1.0 + 2 * np.random.rand(nstates, ndim))**2,
-              'full': np.array([_generate_random_spd_matrix(ndim)
+              'full': np.array([_generate_random_spd_matrix(ndim) + np.eye(ndim)
                                 for x in xrange(nstates)])}
+
+
+class GaussianHMMTester(GaussianHMMParams):
     def test_bad_cvtype(self):
         h = hmm.GaussianHMM(20, 1, self.cvtype)
         self.assertRaises(ValueError, hmm.HMM, 20, 1, 'badcvtype')
@@ -308,8 +309,8 @@ class GaussianHMMTester():
         h.startprob = self.startprob
         tmp = self.transmat + np.diag(np.random.rand(self.nstates))
         h.transmat = tmp / np.tile(tmp.sum(axis=1), (self.nstates, 1)).T
-        h.means = self.means
-        h.covars = 20*self.covars[self.cvtype]
+        h.means = 20 * self.means
+        h.covars = self.covars[self.cvtype]
 
         # Create a training and testing set by sampling from the same
         # distribution.
@@ -319,11 +320,12 @@ class GaussianHMMTester():
         h.init(train_obs, minit='points')
         init_testll = [h.lpdf(x) for x in test_obs]
 
-        trainll = h.train(train_obs, iter=5, params=params)
-        if not np.all(np.diff(trainll) > -0.5):
+        trainll = h.train(train_obs, iter=50, params=params)
+        if not np.all(np.diff(trainll) > -1e3):
             print
-            print 'Test train: %s (%s)\n  %s' % (self.cvtype, params, trainll)
-        self.assertTrue(np.all(np.diff(trainll) > -0.5))
+            print 'Test train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
+                                                       trainll, np.diff(trainll))
+        self.assertTrue(np.all(np.diff(trainll) > -1e3))
 
         post_testll = [h.lpdf(x) for x in test_obs]
         if not (post_testll > init_testll):
@@ -355,18 +357,25 @@ class TestGaussianHMMWithFullCovars(unittest.TestCase, GaussianHMMTester):
     cvtype = 'full'
 
 
-class GaussianHMMMAPTrainerTester(GaussianHMMTester):
+class GaussianHMMMAPTrainerTester(GaussianHMMParams):
     def test_train(self, params='stmc'):
-        priorhmm = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
-                                   means = 0.5 * self.means)
-        trainer = hmm.hmm_trainers.GaussianHMMMAPTrainer(priorhmm)
+        covars_weight = 1.0
+        if self.cvtype in ('full', 'tied'):
+            covars_weight = self.ndim + 1.0
+        trainer = hmm.hmm_trainers.GaussianHMMMAPTrainer(
+            startprob_prior=self.startprob,
+            transmat_prior=2*self.transmat,
+            means_prior=self.means,
+            means_weight=1.0,
+            covars_prior=self.covars,
+            covars_weight=covars_weight)
         h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
                             trainer=trainer)
         h.startprob = self.startprob
         tmp = self.transmat + np.diag(np.random.rand(self.nstates))
         h.transmat = tmp / np.tile(tmp.sum(axis=1), (self.nstates, 1)).T
-        h.means = self.means
-        h.covars = 20*self.covars[self.cvtype]
+        h.means = 20*self.means
+        h.covars = self.covars[self.cvtype]
 
         # Create a training and testing set by sampling from the same
         # distribution.
@@ -376,12 +385,12 @@ class GaussianHMMMAPTrainerTester(GaussianHMMTester):
         h.init(train_obs, minit='points')
         init_testll = [h.lpdf(x) for x in test_obs]
 
-        trainll = h.train(train_obs, iter=5, params=params)
-        if not np.all(np.diff(trainll) > -0.5):
+        trainll = h.train(train_obs, iter=50, params=params)
+        if not np.all(np.diff(trainll) > -1e3):
             print
-            print 'Test MAP train: %s (%s)\n  %s' % (self.cvtype, params,
-                                                     trainll)
-        self.assertTrue(np.all(np.diff(trainll[1:]) > -0.5))
+            print 'Test MAP train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
+                                                       trainll, np.diff(trainll))
+        self.assertTrue(np.all(np.diff(trainll) > -1e3))
 
         post_testll = [h.lpdf(x) for x in test_obs]
         if not (post_testll > init_testll):

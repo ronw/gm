@@ -33,6 +33,9 @@ def logsum(A, axis=None):
         Anorm = np.tile(Amax, shape)
     Asum = np.log(np.sum(np.exp(A - Anorm), axis))
     Asum += Amax.reshape(Asum.shape)
+    if axis:
+        # Look out for underflow.
+        Asum[np.isnan(Asum)] = -np.Inf
     return Asum
 
 def normalize(A, axis=None):
@@ -44,7 +47,7 @@ def normalize(A, axis=None):
         Asum.shape = shape
         shape = np.ones(A.ndim)
         shape[axis] = A.shape[axis]
-        Anorm = np.tile(Asum, shape)
+        Anorm = np.tile(Asum, shape) 
     return A / Anorm
 
 def lmvnpdf(obs, means, covars, cvtype='diag'):
@@ -470,7 +473,6 @@ def _lmvnpdfdiag(obs, means=0.0, covars=1.0):
                   + np.sum((means**2) / covars, 1)
                   - 2 * np.dot(obs, (means / covars).T)
                   + np.dot(obs**2, (1.0 / covars).T))
-
     return lpr
 
 def _lmvnpdfspherical(obs, means=0.0, covars=1.0):
@@ -559,7 +561,7 @@ def _covar_mstep_diag(gmm, obs, posteriors, avg_obs, norm, min_covar):
     # But everything here is a row vector, so all of the
     # above needs to be transposed.
     avg_obs2 = np.dot(posteriors.T, obs * obs) * norm
-    avg_means2 = gmm._means**2
+    avg_means2 = gmm._means**2 
     avg_obs_means = gmm._means * avg_obs * norm
     return avg_obs2 - 2 * avg_obs_means + avg_means2 + min_covar
 

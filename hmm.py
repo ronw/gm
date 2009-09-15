@@ -83,7 +83,7 @@ class _BaseHMM(GenerativeModel):
     @abc.abstractproperty
     def emission_type(self):
         """String identifier for the emission distribution used by this HMM"""
-        pass
+        return None
 
     def __init__(self, nstates=1, startprob=None, transmat=None,
         labels=None, trainer=hmm_trainers.BaseHMMBaumWelchTrainer()):
@@ -340,6 +340,19 @@ class _BaseHMM(GenerativeModel):
             raise ValueError, 'each row of transmat must sum to 1.0'
         
         self._log_transmat = np.log(np.asarray(transmat).copy())
+        underflow_idx = np.isnan(self._log_transmat)
+        self._log_transmat[underflow_idx] = -np.Inf
+
+    @property
+    def trainer(self):
+        """HMMTrainer used to train this HMM."""
+        return self._trainer
+
+    @trainer.setter
+    def trainer(self, trainer):
+        if self.emission_type != trainer.emission_type:
+            raise ValueError, 'trainer has incompatible emission_type'
+        self._trainer = trainer
 
     def _do_viterbi_pass(self, framelogprob, maxrank=None, beamlogprob=-np.Inf):
         nobs = len(framelogprob)
@@ -374,7 +387,7 @@ class _BaseHMM(GenerativeModel):
             fwdlattice[n] = (logsum(self._log_transmat[idx].T
                                     + fwdlattice[n-1,idx], axis=1)
                              + framelogprob[n])
-        fwdlattice[fwdlattice <= ZEROLOGPROB] = -np.Inf;
+        fwdlattice[fwdlattice <= ZEROLOGPROB] = -np.Inf
 
         return logsum(fwdlattice[-1]), fwdlattice
 
@@ -382,6 +395,7 @@ class _BaseHMM(GenerativeModel):
                           beamlogprob=-np.Inf):
         nobs = len(framelogprob)
         bwdlattice = np.zeros((nobs, self._nstates))
+
         for n in xrange(nobs - 1, 0, -1):
             # Do HTK style pruning (p. 137 of HTK Book version 3.4).
             # Don't bother computing backward probability if
@@ -391,10 +405,10 @@ class _BaseHMM(GenerativeModel):
                                      -50)
                                      #beamlogprob)
                                      #-np.Inf)
-            bwdlattice[n-1] = logsum(self._log_transmat[idx].T
+            bwdlattice[n-1] = logsum(self._log_transmat[:,idx]
                                      + bwdlattice[n,idx] + framelogprob[n,idx],
                                      axis=1)
-        bwdlattice[bwdlattice <= ZEROLOGPROB] = -np.Inf;
+        bwdlattice[bwdlattice <= ZEROLOGPROB] = -np.Inf
 
         return bwdlattice
 

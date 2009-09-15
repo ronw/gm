@@ -1,4 +1,5 @@
 import abc
+import logging
 import time
 
 import numpy as np
@@ -6,19 +7,16 @@ import numpy as np
 import hmm
 from gmm import *
 
-# FIXME - remove trainers from HMM classes so that we can easily swap
-# in adaptation, etc.
-# trainer=DefaultTrainer
-# class DefaultTrainer(BaseHMMTrainer):
-#     def train(hmm, ...
-# can have instance variances
-# class MAPAdaptationTrainer
-
+log = logging.getLogger('gm.hmm_trainers')
 
 class HMMTrainer(object):
     """Abstract base class for HMM training algorithms."""
 
     __metaclass__ = abc.ABCMeta
+
+    @abc.abstractproperty
+    def emission_type(self):
+        pass
 
     def train(self, hmm, obs, iter=10, thresh=1e-2, params='stmpc',
               maxrank=None, beamlogprob=-np.Inf, **kwargs):
@@ -53,8 +51,16 @@ class HMMTrainer(object):
         -------
         logprob : list
             Log probabilities of the training data after each iteration.
-        """
 
+        Notes
+        -----
+        In general, `logprob` should be non-decreasing unless
+        aggressive pruning is used.  Decreasing `logprob` is generally
+        a sign of overfitting (e.g. a covariance parameter getting too
+        small).  You can fix this by using a different trainer
+        (e.g. based on model adaptation), getting more training data,
+        or decreasing `covarprior`.
+        """
         T = time.time()
         logprob = []
         for i in xrange(iter):
@@ -69,7 +75,6 @@ class HMMTrainer(object):
                                                    maxrank, beamlogprob)
                 gamma = fwdlattice + bwdlattice
                 posteriors = np.exp(gamma.T - logsum(gamma, axis=1)).T
-
                 curr_logprob += lpr
                 self._accumulate_sufficient_statistics(hmm, stats, seq,
                                                        framelogprob, posteriors,
@@ -81,23 +86,28 @@ class HMMTrainer(object):
                       % (i, logprob[-1], currT - T))
             T = currT
 
-            # Check for convergence.
-            if i > 0 and abs(logprob[-1] - logprob[-2]) < thresh:
-                log.info('Converged at iteration %d.' % i)
-                break
+            if i > 0:
+                if logprob[-1] < logprob[-2]:
+                    log.warning("Log likelihood decreased at iteration %d.", i)
+                if abs(logprob[-1] - logprob[-2]) < thresh:
+                    log.info('Converged at iteration %d.' % i)
+                    break
 
             # Maximization step
             self._do_mstep(hmm, stats, params, **kwargs)
 
         return logprob
 
+    @abc.abstractmethod
     def _initialize_sufficient_statistics(self, hmm):
         pass
 
+    @abc.abstractmethod
     def _accumulate_sufficient_statistics(self, hmm, stats, seq, framelogprob, 
                                           posteriors, fwdlattice, bwdlattice):
         pass
     
+    @abc.abstractmethod
     def _do_mstep(self, hmm, stats, params, **kwargs):
         pass
 
@@ -108,9 +118,10 @@ class BaseHMMBaumWelchTrainer(HMMTrainer):
     Uses the Baum-Welch algorithm to train the startprob and transmat
     parameters.
     """
+    emission_type = None
 
     def _initialize_sufficient_statistics(self, hmm):
-        stats = {'nobs': 0,
+        stats = {'nobs':  0,
                  'start': np.zeros(hmm._nstates),
                  'trans': np.zeros((hmm._nstates, hmm._nstates))}
         return stats
@@ -121,33 +132,32 @@ class BaseHMMBaumWelchTrainer(HMMTrainer):
         stats['start'] += posteriors[0]
 
         zeta = np.zeros((hmm._nstates, hmm._nstates))
-        for t in xrange(len(framelogprob) - 1):
-            zeta = (np.tile(fwdlattice[t], (hmm._nstates, 1)).T
-                    + hmm._log_transmat.T
-                    + np.tile(framelogprob[t + 1] + bwdlattice[t + 1],
+        for t in xrange(len(framelogprob)):
+            zeta = (np.tile(fwdlattice[t-1], (hmm._nstates, 1)).T
+                    + hmm._log_transmat
+                    + np.tile(framelogprob[t] + bwdlattice[t],
                               (hmm._nstates, 1)))
             stats['trans'] += np.exp(zeta - logsum(zeta))
 
     def _do_mstep(self, hmm, stats, params, **kwargs):
         if 's' in params:
-            hmm.startprob = stats['start'] / stats['nobs']
+            hmm.startprob = stats['start'] / stats['start'].sum()
         if 't' in params:
             hmm.transmat = normalize(stats['trans'], axis=1)
 
 
 class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
-    """Standard Baum-Welch trainer for HMMs with Gaussian emissions."""
+    """Baum-Welch trainer for HMMs with Gaussian emissions."""
+
+    emission_type = 'gaussian'
 
     def _initialize_sufficient_statistics(self, hmm):
         stats = super(GaussianHMMBaumWelchTrainer,
                       self)._initialize_sufficient_statistics(hmm)
-
-        stats['obs'] = np.zeros((hmm._nstates, hmm._ndim))
-        if hmm._cvtype in ('spherical', 'diag'):
-            stats['obs**2'] = np.zeros((hmm._nstates, hmm._ndim))
-        elif hmm._cvtype in ('tied', 'full'):
-            stats['obs.T*obs'] = np.zeros((hmm._nstates, hmm._ndim,
-                                           hmm._ndim))
+        stats['post']   = np.zeros(hmm._nstates)
+        stats['obs']    = np.zeros((hmm._nstates, hmm._ndim))
+        stats['obs**2'] = np.zeros((hmm._nstates, hmm._ndim))
+        stats['obs*obs.T'] = np.zeros((hmm._nstates, hmm._ndim, hmm._ndim))
         return stats
 
     def _accumulate_sufficient_statistics(self, hmm, stats, obs, framelogprob,
@@ -155,31 +165,32 @@ class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
         super(GaussianHMMBaumWelchTrainer,
               self)._accumulate_sufficient_statistics(hmm, stats, obs,
                                                       framelogprob, posteriors,
-                                                       fwdlattice, bwdlattice)
-        w = posteriors.sum(axis=0)
-        norm = np.tile(1.0 / w, (hmm._ndim, 1)).T
-
-        stats['obs'] += np.dot(posteriors.T, obs) * norm
+                                                      fwdlattice, bwdlattice)
+        stats['post'] += posteriors.sum(axis=0)
+        stats['obs'] += np.dot(posteriors.T, obs)
 
         if hmm._cvtype in ('spherical', 'diag'):
-            stats['obs**2'] += np.dot(posteriors.T, obs**2) * norm
+            stats['obs**2'] += np.dot(posteriors.T, obs**2)
         elif hmm._cvtype in ('tied', 'full'):
             for t, o in enumerate(obs):
-                obsTobs = np.outer(o, o)
+                obsobsT = np.outer(o, o)
                 for c in xrange(hmm._nstates):
-                    stats['obs.T*obs'][c] += posteriors[t,c] * obsTobs / w[c]
+                    stats['obs*obs.T'][c] += posteriors[t,c] * obsobsT
                     
-    def _do_mstep(self, hmm, stats, params, min_covar=1.0, **kwargs):
+    def _do_mstep(self, hmm, stats, params, covarprior=1e-2, **kwargs):
         super(GaussianHMMBaumWelchTrainer, self)._do_mstep(hmm, stats, params)
 
+        denom = np.tile(stats['post'], (hmm._ndim, 1)).T
         if 'm' in params:
-            hmm._means = stats['obs'] / stats['nobs']
+            hmm._means = stats['obs'] / denom
 
         if 'c' in params:
             if hmm._cvtype in ('spherical', 'diag'):
-                cv = (stats['obs**2'] / stats['nobs']
-                      - 2 * hmm._means * stats['obs'] / stats['nobs']
-                      + hmm._means ** 2 + min_covar)
+                cv = ((stats['obs**2']
+                       - 2 * hmm._means * stats['obs']
+                       + hmm._means**2 * denom
+                       + covarprior)
+                      / (1.0 + denom))
                 if hmm._cvtype == 'spherical':
                     hmm._covars = cv.mean(axis=1)
                 elif hmm._cvtype == 'diag':
@@ -187,81 +198,95 @@ class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
             elif hmm._cvtype in ('tied', 'full'):
                 hmm._covars[:] = 0
                 for c in xrange(hmm._nstates):
-                    cv = (stats['obs.T*obs'][c] / stats['nobs']
-                          - 2 * np.outer(stats['obs'][c] / stats['nobs'],
-                                         hmm._means[c])
-                          + np.outer(hmm._means[c], hmm._means[c])
-                          + min_covar * np.eye(hmm._ndim))
+                    cv = ((stats['obs*obs.T'][c]
+                           - 2 * np.outer(stats['obs'][c], hmm._means[c])
+                           + np.outer(hmm._means[c] * stats['post'][c],
+                                      hmm._means[c]) 
+                           + np.eye(hmm._ndim) * covarprior)
+                          / (1.0 + stats['post'][c]))
                     if hmm._cvtype == 'tied':
                         hmm._covars += cv / hmm._nstates
                     elif hmm._cvtype == 'full':
                         hmm._covars[c] = cv
-
+            
 
 class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
     """HMM trainer based on maximum-a-posteriori (MAP) adaptation.
     """
+    emission_type = 'gaussian'
 
-    # FIXME means and covars aren't being normalized correctly
-    def __init__(self, priorhmm, weights={}):
-        self.priorhmm = priorhmm
-
-        for field in ['means', 'covars']:
-            if field not in weights:
-                weights[field] = 1.0
-        self.weights = weights
+    def __init__(self, startprob_prior=None, transmat_prior=None,
+                 means_prior=None, means_weight=1.0,
+                 covars_prior=None, covars_weight=1.0):
+        self.startprob_prior = startprob_prior
+        self.transmat_prior = transmat_prior
+        self.means_prior = means_prior
+        self.means_weight = means_weight
+        self.covars_prior = covars_prior
+        self.covars_weight = covars_weight
 
     def _do_mstep(self, hmm, stats, params, **kwargs):
         # Based on Huang, Acero, Hon, "Spoken Language Processing", p. 443 - 445
         if 's' in params:
-            hmm.startprob = ((self.priorhmm.startprob - 1 + stats['start'])
-                             / np.sum(self.priorhmm.startprob - 1
-                                      + stats['start']))
-        if 't' in params:
-            transmat = np.empty(hmm.transmat.shape)
-            for n in xrange(hmm.nstates):
-                transmat[n] = ((self.priorhmm.transmat[n] - 1
-                                + stats['trans'][n])
-                               / np.sum(self.priorhmm.transmat[n] - 1
-                                        + stats['trans'][n]))
-            #hmm.transmat = normalize(transmat, axis=1)
-            hmm.transmat = transmat
+            prior = self.startprob_prior
+            if prior is None:
+                prior = 1.0
+            hmm.startprob = ((prior - 1.0 + stats['start'])
+                             / np.sum(prior - 1.0 + stats['start']))
 
+        if 't' in params:
+            prior = self.transmat_prior
+            if prior is None:
+                prior = 1.0
+            hmm.transmat = normalize(prior - 1.0 + stats['trans'], axis=1)
+
+        denom = np.tile(stats['post'], (hmm._ndim, 1)).T
         if 'm' in params:
-            weight = self.weights['means']
-            hmm._means = ((weight * self.priorhmm.means + stats['obs'])
-                          / (weight + stats['nobs']))
+            prior = self.means_prior
+            weight = self.means_weight
+            if prior is None:
+                weight = 0
+                prior = 0
+            hmm._means = (weight * prior + stats['obs']) / (weight + denom)
 
         if 'c' in params:
-            wM = self.weights['means']
-            wC = self.weights['covars']
-            meandiff = hmm._means - self.priorhmm.means
+            covars_prior = self.covars_prior
+            covars_weight = self.covars_weight
+            if covars_prior is None:
+                covars_weight = 0
+                covars_prior = 0
+
+            means_prior = self.means_prior
+            means_weight = self.means_weight
+            if means_prior is None:
+                means_weight = 0
+                means_prior = 0
+            meandiff = hmm._means - means_prior
+
             if hmm._cvtype in ('spherical', 'diag'):
-                cv = (((wC - 1) * self.priorhmm.covars
-                       + wM * (meandiff)**2
-                       + stats['obs**2'] 
-                       - 2 * hmm._means * stats['obs']
-                       + hmm._means ** 2)
-                      / (wC - 1 + stats['nobs']))
+                cv_num = (means_weight * (meandiff)**2
+                          + stats['obs**2']
+                          - 2 * hmm._means * stats['obs']
+                          + hmm._means**2 * denom)
+                cv_den = max(covars_weight - 1, 0) + denom
                 if hmm._cvtype == 'spherical':
-                    hmm._covars = cv.mean(axis=1)
+                    hmm._covars = (covars_prior / cv_den.mean(axis=1)
+                                   + np.mean(cv_num / cv_den, axis=1))
                 elif hmm._cvtype == 'diag':
-                    hmm._covars = cv
+                    hmm._covars = (covars_prior + cv_num) / cv_den
             elif hmm._cvtype in ('tied', 'full'):
                 hmm._covars[:] = 0
-                print hmm._means.shape, hmm._nstates
-                c = 2
-                print np.outer(hmm._means[c], hmm._means[c])
                 for c in xrange(hmm._nstates):
-                    print c, hmm.means[c]
-                    cv = (((wC - 1) * self.priorhmm.covars[c]
-                           + wM * np.outer(meandiff[c], meandiff[c])
-                           + stats['obs.T*obs'][c] 
-                           - 2 * np.outer(stats['obs'][c], hmm._means[c])
-                           + np.outer(hmm._means[c], hmm._means[c]))
-                          / (wC - 1 + stats['nobs']))
+                    cv_num = (means_weight * np.outer(meandiff[c], meandiff[c])
+                              + stats['obs*obs.T'][c] 
+                              - 2 * np.outer(stats['obs'][c], hmm._means[c])
+                              + np.outer(hmm._means[c], hmm._means[c])
+                              * stats['post'][c])
+                    cv_den = (max(weights_covar - hmm._ndim, 0)
+                              + stats['post'][c])
                     if hmm._cvtype == 'tied':
-                        hmm._covars += cv / hmm._nstates
+                        hmm._covars += ((covars_prior + cv_num)
+                                        / (cv_den * hmm._nstates))
                     elif hmm._cvtype == 'full':
-                        hmm._covars[c] = cv
-            print 'COVARS (%s)' % self.cvtype, hmm._covars
+                        hmm._covars[c] = (covars_prior[c] + cv_num) / cv_den
+ 
