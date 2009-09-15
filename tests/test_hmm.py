@@ -304,7 +304,7 @@ class GaussianHMMTester(GaussianHMMParams):
         samples = h.rvs(n)
         self.assertEquals(samples.shape, (n, self.ndim))
 
-    def test_train(self, params='stmc'):
+    def test_train(self, params='stmc', niter=5):
         h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype)
         h.startprob = self.startprob
         tmp = self.transmat + np.diag(np.random.rand(self.nstates))
@@ -320,7 +320,7 @@ class GaussianHMMTester(GaussianHMMParams):
         h.init(train_obs, minit='points')
         init_testll = [h.lpdf(x) for x in test_obs]
 
-        trainll = h.train(train_obs, iter=50, params=params)
+        trainll = h.train(train_obs, iter=niter, params=params)
         if not np.all(np.diff(trainll) > -1e3):
             print
             print 'Test train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
@@ -328,11 +328,14 @@ class GaussianHMMTester(GaussianHMMParams):
         self.assertTrue(np.all(np.diff(trainll) > -1e3))
 
         post_testll = [h.lpdf(x) for x in test_obs]
-        if not (post_testll > init_testll):
+        if not (np.sum(post_testll) > np.sum(init_testll)):
             print
             print 'Test train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
                                                        init_testll, post_testll)
-        self.assertTrue(post_testll > init_testll)
+        self.assertTrue(np.sum(post_testll) > np.sum(init_testll))
+
+    def test_train_covars(self):
+        self.test_train('c')
 
 
 class TestGaussianHMMWithSphericalCovars(unittest.TestCase, GaussianHMMTester):
@@ -358,16 +361,16 @@ class TestGaussianHMMWithFullCovars(unittest.TestCase, GaussianHMMTester):
 
 
 class GaussianHMMMAPTrainerTester(GaussianHMMParams):
-    def test_train(self, params='stmc'):
+    def test_train(self, params='stmc', niter=5):
         covars_weight = 1.0
         if self.cvtype in ('full', 'tied'):
             covars_weight = self.ndim + 1.0
         trainer = hmm.hmm_trainers.GaussianHMMMAPTrainer(
-            startprob_prior=self.startprob,
-            transmat_prior=2*self.transmat,
+            startprob_prior=10*self.startprob + 2.0,
+            transmat_prior=10*self.transmat + 2.0,
             means_prior=self.means,
             means_weight=1.0,
-            covars_prior=self.covars,
+            covars_prior=self.covars[self.cvtype],
             covars_weight=covars_weight)
         h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
                             trainer=trainer)
@@ -385,7 +388,7 @@ class GaussianHMMMAPTrainerTester(GaussianHMMParams):
         h.init(train_obs, minit='points')
         init_testll = [h.lpdf(x) for x in test_obs]
 
-        trainll = h.train(train_obs, iter=50, params=params)
+        trainll = h.train(train_obs, iter=niter, params=params)
         if not np.all(np.diff(trainll) > -1e3):
             print
             print 'Test MAP train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
@@ -393,12 +396,15 @@ class GaussianHMMMAPTrainerTester(GaussianHMMParams):
         self.assertTrue(np.all(np.diff(trainll) > -1e3))
 
         post_testll = [h.lpdf(x) for x in test_obs]
-        if not (post_testll > init_testll):
+        if not (np.sum(post_testll) > np.sum(init_testll)):
             print
             print 'Test MAP train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
                                                            init_testll,
                                                            post_testll)
-        self.assertTrue(post_testll > init_testll)
+        self.assertTrue(np.sum(post_testll) > np.sum(init_testll))
+
+    def test_train_covars(self):
+        self.test_train('c')
 
 
 class TestGaussianHMMMAPTrainerWithSphericalCovars(unittest.TestCase,

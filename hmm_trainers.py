@@ -148,15 +148,14 @@ class BaseHMMBaumWelchTrainer(HMMTrainer):
 
 class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
     """Baum-Welch trainer for HMMs with Gaussian emissions."""
-
     emission_type = 'gaussian'
 
     def _initialize_sufficient_statistics(self, hmm):
         stats = super(GaussianHMMBaumWelchTrainer,
                       self)._initialize_sufficient_statistics(hmm)
-        stats['post']   = np.zeros(hmm._nstates)
-        stats['obs']    = np.zeros((hmm._nstates, hmm._ndim))
-        stats['obs**2'] = np.zeros((hmm._nstates, hmm._ndim))
+        stats['post']      = np.zeros(hmm._nstates)
+        stats['obs']       = np.zeros((hmm._nstates, hmm._ndim))
+        stats['obs**2']    = np.zeros((hmm._nstates, hmm._ndim))
         stats['obs*obs.T'] = np.zeros((hmm._nstates, hmm._ndim, hmm._ndim))
         return stats
 
@@ -218,6 +217,9 @@ class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
     def __init__(self, startprob_prior=None, transmat_prior=None,
                  means_prior=None, means_weight=1.0,
                  covars_prior=None, covars_weight=1.0):
+        """Initialize MAP trainer with the parameters for the prior
+        distribution.
+        """
         self.startprob_prior = startprob_prior
         self.transmat_prior = transmat_prior
         self.means_prior = means_prior
@@ -231,14 +233,15 @@ class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
             prior = self.startprob_prior
             if prior is None:
                 prior = 1.0
-            hmm.startprob = ((prior - 1.0 + stats['start'])
-                             / np.sum(prior - 1.0 + stats['start']))
+            hmm.startprob = normalize(np.maximum(prior - 1.0 + stats['start'],
+                                                 1e-20))
 
         if 't' in params:
             prior = self.transmat_prior
             if prior is None:
                 prior = 1.0
-            hmm.transmat = normalize(prior - 1.0 + stats['trans'], axis=1)
+            hmm.transmat = normalize(np.maximum(prior - 1.0 + stats['trans'],
+                                                1e-20), axis=1)
 
         denom = np.tile(stats['post'], (hmm._ndim, 1)).T
         if 'm' in params:
@@ -282,7 +285,7 @@ class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
                               - 2 * np.outer(stats['obs'][c], hmm._means[c])
                               + np.outer(hmm._means[c], hmm._means[c])
                               * stats['post'][c])
-                    cv_den = (max(weights_covar - hmm._ndim, 0)
+                    cv_den = (max(covars_weight - hmm._ndim, 0)
                               + stats['post'][c])
                     if hmm._cvtype == 'tied':
                         hmm._covars += ((covars_prior + cv_num)

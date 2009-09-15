@@ -42,6 +42,8 @@ def normalize(A, axis=None):
     Asum = A.sum(axis)
     Anorm = Asum
     if axis and A.ndim > 1:
+        # Make sure we don't divide by zero.
+        Asum[Asum == 0] = 1
         shape = list(A.shape)
         shape[axis] = 1
         Asum.shape = shape
