@@ -10,10 +10,10 @@ from test_gmm import _generate_random_spd_matrix
 
 import hmm
 
-#import logging
-#logging.basicConfig(level=logging.INFO,
-#                    datefmt="%Y-%m-%d %H:%M:%S",
-#                    format="%(asctime)s:%(levelname)s:%(message)s")
+# import logging
+# logging.basicConfig(level=logging.INFO,
+#                     datefmt="%Y-%m-%d %H:%M:%S",
+#                     format="%(asctime)s:%(levelname)s:%(message)s")
 
 np.random.seed(0)
 
@@ -321,11 +321,11 @@ class GaussianHMMTester(GaussianHMMParams):
         init_testll = [h.lpdf(x) for x in test_obs]
 
         trainll = h.train(train_obs, iter=niter, params=params)
-        if not np.all(np.diff(trainll) > -1e3):
+        if not np.all(np.diff(trainll) > 0):
             print
             print 'Test train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
                                                        trainll, np.diff(trainll))
-        self.assertTrue(np.all(np.diff(trainll) > -1e3))
+        self.assertTrue(np.all(np.diff(trainll) > -0.5))
 
         post_testll = [h.lpdf(x) for x in test_obs]
         if not (np.sum(post_testll) > np.sum(init_testll)):
@@ -362,14 +362,14 @@ class TestGaussianHMMWithFullCovars(unittest.TestCase, GaussianHMMTester):
 
 class GaussianHMMMAPTrainerTester(GaussianHMMParams):
     def test_train(self, params='stmc', niter=5):
-        covars_weight = 1.0
+        covars_weight = 2.0
         if self.cvtype in ('full', 'tied'):
-            covars_weight = self.ndim + 1.0
+            covars_weight += self.ndim
         trainer = hmm.hmm_trainers.GaussianHMMMAPTrainer(
             startprob_prior=10*self.startprob + 2.0,
             transmat_prior=10*self.transmat + 2.0,
             means_prior=self.means,
-            means_weight=1.0,
+            means_weight=2.0,
             covars_prior=self.covars[self.cvtype],
             covars_weight=covars_weight)
         h = hmm.GaussianHMM(self.nstates, self.ndim, self.cvtype,
@@ -377,23 +377,23 @@ class GaussianHMMMAPTrainerTester(GaussianHMMParams):
         h.startprob = self.startprob
         tmp = self.transmat + np.diag(np.random.rand(self.nstates))
         h.transmat = tmp / np.tile(tmp.sum(axis=1), (self.nstates, 1)).T
-        h.means = 20*self.means
+        h.means = 20 * self.means
         h.covars = self.covars[self.cvtype]
 
         # Create a training and testing set by sampling from the same
         # distribution.
-        train_obs = [h.rvs(n=10) for x in xrange(50)]
+        train_obs = [h.rvs(n=10) for x in xrange(10)]
         test_obs = [h.rvs(n=10) for x in xrange(5)]
 
         h.init(train_obs, minit='points')
         init_testll = [h.lpdf(x) for x in test_obs]
 
         trainll = h.train(train_obs, iter=niter, params=params)
-        if not np.all(np.diff(trainll) > -1e3):
+        if not np.all(np.diff(trainll) > 0):
             print
             print 'Test MAP train: %s (%s)\n  %s\n  %s' % (self.cvtype, params,
                                                        trainll, np.diff(trainll))
-        self.assertTrue(np.all(np.diff(trainll) > -1e3))
+        self.assertTrue(np.all(np.diff(trainll) > -0.5))
 
         post_testll = [h.lpdf(x) for x in test_obs]
         if not (np.sum(post_testll) > np.sum(init_testll)):

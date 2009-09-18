@@ -170,16 +170,16 @@ class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
 
         if hmm._cvtype in ('spherical', 'diag'):
             stats['obs**2'] += np.dot(posteriors.T, obs**2)
-        elif hmm._cvtype in ('tied', 'full'):
+        elif hmm._cvtype in ('tied', 'full'):  
             for t, o in enumerate(obs):
                 obsobsT = np.outer(o, o)
                 for c in xrange(hmm._nstates):
                     stats['obs*obs.T'][c] += posteriors[t,c] * obsobsT
-                    
+                  
     def _do_mstep(self, hmm, stats, params, covarprior=1e-2, **kwargs):
         super(GaussianHMMBaumWelchTrainer, self)._do_mstep(hmm, stats, params)
 
-        denom = np.tile(stats['post'], (hmm._ndim, 1)).T
+        denom = stats['post'][:,np.newaxis]
         if 'm' in params:
             hmm._means = stats['obs'] / denom
 
@@ -195,19 +195,20 @@ class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
                 elif hmm._cvtype == 'diag':
                     hmm._covars = cv
             elif hmm._cvtype in ('tied', 'full'):
-                hmm._covars[:] = 0
+                cvnum = np.empty((hmm._nstates, hmm._ndim, hmm._ndim))
+                cvprior = np.eye(hmm._ndim) * covarprior
                 for c in xrange(hmm._nstates):
-                    cv = ((stats['obs*obs.T'][c]
-                           - 2 * np.outer(stats['obs'][c], hmm._means[c])
-                           + np.outer(hmm._means[c] * stats['post'][c],
-                                      hmm._means[c]) 
-                           + np.eye(hmm._ndim) * covarprior)
-                          / (1.0 + stats['post'][c]))
-                    if hmm._cvtype == 'tied':
-                        hmm._covars += cv / hmm._nstates
-                    elif hmm._cvtype == 'full':
-                        hmm._covars[c] = cv
-            
+                    cvnum[c] = (stats['obs*obs.T'][c]
+                                - 2 * np.outer(stats['obs'][c], hmm._means[c])
+                                + np.outer(hmm._means[c] * stats['post'][c],
+                                           hmm._means[c]))
+                if hmm._cvtype == 'tied':
+                    hmm._covars = ((cvnum.sum(axis=0) + cvprior)
+                                   / (1.0 + stats['post'].sum()))
+                elif hmm._cvtype == 'full':
+                    hmm._covars = ((cvnum + cvprior)
+                                   / (1.0 + stats['post'][:,None,None]))
+
 
 class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
     """HMM trainer based on maximum-a-posteriori (MAP) adaptation.
@@ -243,7 +244,7 @@ class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
             hmm.transmat = normalize(np.maximum(prior - 1.0 + stats['trans'],
                                                 1e-20), axis=1)
 
-        denom = np.tile(stats['post'], (hmm._ndim, 1)).T
+        denom = stats['post'][:,np.newaxis]
         if 'm' in params:
             prior = self.means_prior
             weight = self.means_weight
@@ -278,18 +279,19 @@ class GaussianHMMMAPTrainer(GaussianHMMBaumWelchTrainer):
                 elif hmm._cvtype == 'diag':
                     hmm._covars = (covars_prior + cv_num) / cv_den
             elif hmm._cvtype in ('tied', 'full'):
-                hmm._covars[:] = 0
+                cvnum = np.empty((hmm._nstates, hmm._ndim, hmm._ndim))
                 for c in xrange(hmm._nstates):
-                    cv_num = (means_weight * np.outer(meandiff[c], meandiff[c])
-                              + stats['obs*obs.T'][c] 
-                              - 2 * np.outer(stats['obs'][c], hmm._means[c])
-                              + np.outer(hmm._means[c], hmm._means[c])
-                              * stats['post'][c])
-                    cv_den = (max(covars_weight - hmm._ndim, 0)
-                              + stats['post'][c])
-                    if hmm._cvtype == 'tied':
-                        hmm._covars += ((covars_prior + cv_num)
-                                        / (cv_den * hmm._nstates))
-                    elif hmm._cvtype == 'full':
-                        hmm._covars[c] = (covars_prior[c] + cv_num) / cv_den
+                    cvnum[c] = (means_weight * np.outer(meandiff[c], meandiff[c])
+                                + stats['obs*obs.T'][c] 
+                                - 2 * np.outer(stats['obs'][c], hmm._means[c])
+                                + np.outer(hmm._means[c], hmm._means[c])
+                                * stats['post'][c])
+                cvweight = max(covars_weight - hmm._ndim, 0)
+                if hmm._cvtype == 'tied':
+                    hmm._covars = ((covars_prior + cvnum.sum(axis=0))
+                                    / (cvweight + stats['post'].sum()))
+                elif hmm._cvtype == 'full':
+                    hmm._covars = ((covars_prior + cvnum)
+                                   / (cvweight + stats['post'][:,None,None]))
+
  
