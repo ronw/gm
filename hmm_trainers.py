@@ -78,7 +78,8 @@ class HMMTrainer(object):
                 curr_logprob += lpr
                 self._accumulate_sufficient_statistics(hmm, stats, seq,
                                                        framelogprob, posteriors,
-                                                       fwdlattice, bwdlattice)
+                                                       fwdlattice, bwdlattice,
+                                                       params)
             logprob.append(curr_logprob)
 
             currT = time.time()
@@ -104,7 +105,8 @@ class HMMTrainer(object):
 
     @abc.abstractmethod
     def _accumulate_sufficient_statistics(self, hmm, stats, seq, framelogprob, 
-                                          posteriors, fwdlattice, bwdlattice):
+                                          posteriors, fwdlattice,
+                                          bwdlattice, params):
         pass
     
     @abc.abstractmethod
@@ -127,17 +129,16 @@ class BaseHMMBaumWelchTrainer(HMMTrainer):
         return stats
 
     def _accumulate_sufficient_statistics(self, hmm, stats, seq, framelogprob, 
-                                          posteriors, fwdlattice, bwdlattice):
+                                          posteriors, fwdlattice, bwdlattice,
+                                          params):
         stats['nobs'] += 1
-        stats['start'] += posteriors[0]
-
-        zeta = np.zeros((hmm._nstates, hmm._nstates))
-        for t in xrange(len(framelogprob)):
-            zeta = (np.tile(fwdlattice[t-1], (hmm._nstates, 1)).T
-                    + hmm._log_transmat
-                    + np.tile(framelogprob[t] + bwdlattice[t],
-                              (hmm._nstates, 1)))
-            stats['trans'] += np.exp(zeta - logsum(zeta))
+        if 's' in params:
+            stats['start'] += posteriors[0]
+        if 't' in params:
+            for t in xrange(len(framelogprob)):
+                zeta = (fwdlattice[t-1][:,np.newaxis] + hmm._log_transmat
+                        + framelogprob[t] + bwdlattice[t])
+                stats['trans'] += np.exp(zeta - logsum(zeta))
 
     def _do_mstep(self, hmm, stats, params, **kwargs):
         if 's' in params:
@@ -160,21 +161,25 @@ class GaussianHMMBaumWelchTrainer(BaseHMMBaumWelchTrainer):
         return stats
 
     def _accumulate_sufficient_statistics(self, hmm, stats, obs, framelogprob,
-                                          posteriors, fwdlattice, bwdlattice):
+                                          posteriors, fwdlattice, bwdlattice,
+                                          params):
         super(GaussianHMMBaumWelchTrainer,
               self)._accumulate_sufficient_statistics(hmm, stats, obs,
                                                       framelogprob, posteriors,
-                                                      fwdlattice, bwdlattice)
-        stats['post'] += posteriors.sum(axis=0)
-        stats['obs'] += np.dot(posteriors.T, obs)
+                                                      fwdlattice, bwdlattice,
+                                                      params)
+        if 'm' in params or 'c' in params:
+            stats['post'] += posteriors.sum(axis=0)
+            stats['obs'] += np.dot(posteriors.T, obs)
 
-        if hmm._cvtype in ('spherical', 'diag'):
-            stats['obs**2'] += np.dot(posteriors.T, obs**2)
-        elif hmm._cvtype in ('tied', 'full'):  
-            for t, o in enumerate(obs):
-                obsobsT = np.outer(o, o)
-                for c in xrange(hmm._nstates):
-                    stats['obs*obs.T'][c] += posteriors[t,c] * obsobsT
+        if 'c' in params:
+            if hmm._cvtype in ('spherical', 'diag'):
+                stats['obs**2'] += np.dot(posteriors.T, obs**2)
+            elif hmm._cvtype in ('tied', 'full'):  
+                for t, o in enumerate(obs):
+                    obsobsT = np.outer(o, o)
+                    for c in xrange(hmm._nstates):
+                        stats['obs*obs.T'][c] += posteriors[t,c] * obsobsT
                   
     def _do_mstep(self, hmm, stats, params, covarprior=1e-2, **kwargs):
         super(GaussianHMMBaumWelchTrainer, self)._do_mstep(hmm, stats, params)

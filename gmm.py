@@ -23,15 +23,11 @@ def logsum(A, axis=None):
     over/underflow.
     """
     Amax = A.max(axis)
-    Anorm = Amax
     if axis and A.ndim > 1:
         shape = list(A.shape)
         shape[axis] = 1
         Amax.shape = shape
-        shape = np.ones(A.ndim)
-        shape[axis] = A.shape[axis]
-        Anorm = np.tile(Amax, shape)
-    Asum = np.log(np.sum(np.exp(A - Anorm), axis))
+    Asum = np.log(np.sum(np.exp(A - Amax), axis))
     Asum += Amax.reshape(Asum.shape)
     if axis:
         # Look out for underflow.
@@ -40,17 +36,13 @@ def logsum(A, axis=None):
 
 def normalize(A, axis=None):
     Asum = A.sum(axis)
-    Anorm = Asum
     if axis and A.ndim > 1:
         # Make sure we don't divide by zero.
         Asum[Asum == 0] = 1
         shape = list(A.shape)
         shape[axis] = 1
         Asum.shape = shape
-        shape = np.ones(A.ndim)
-        shape[axis] = A.shape[axis]
-        Anorm = np.tile(Asum, shape) 
-    return A / Anorm
+    return A / Asum
 
 def lmvnpdf(obs, means, covars, cvtype='diag'):
     """Compute the log probability under a multivariate Gaussian distribution.
@@ -299,9 +291,9 @@ class GMM(GenerativeModel):
             observation
         """
         lpr = (lmvnpdf(obs, self._means, self._covars, self._cvtype)
-               + np.tile(self._log_weights, (len(obs), 1)))
+               + self._log_weights)
         logprob = logsum(lpr, axis=1)
-        posteriors = np.exp(lpr - np.tile(logprob, (self._nstates, 1)).T)
+        posteriors = np.exp(lpr - logprob[:,np.newaxis])
         return logprob, posteriors
 
     def lpdf(self, obs):
@@ -453,8 +445,8 @@ class GMM(GenerativeModel):
             # Maximization step
             w = posteriors.sum(axis=0)
             avg_obs = np.dot(posteriors.T, obs)
-            norm = np.tile(1.0 / w, (self._ndim, 1)).T
-
+            norm = 1.0 / w[:,np.newaxis]
+            
             if 'w' in params:
                 self.weights = w / w.sum()
             if 'm' in params:
@@ -489,9 +481,9 @@ def _lmvnpdftied(obs, means, covars):
     # (x-y).T A (x-y) = x.T A x - 2x.T A y + y.T A y
     icv = np.linalg.inv(covars)
     lpr = -0.5 * (ndim * np.log(2 * np.pi) + np.log(np.linalg.det(covars))
-                  + np.tile(np.sum(obs * np.dot(obs, icv), 1), (nmix, 1)).T
+                  + np.sum(obs * np.dot(obs, icv), 1)[:,np.newaxis]
                   - 2 * np.dot(np.dot(obs, icv), means.T)
-                  + np.tile(np.sum(means * np.dot(means, icv), 1), (nobs, 1)))
+                  + np.sum(means * np.dot(means, icv), 1))
     return lpr
 
 def _lmvnpdffull(obs, means, covars):
@@ -578,7 +570,7 @@ def _covar_mstep_full(gmm, obs, posteriors, avg_obs, norm, min_covar):
     #avg_obs2 = np.dot(obs.T, avg_obs)
     cv = np.empty((gmm._nstates, gmm._ndim, gmm._ndim))
     for c in xrange(gmm._nstates):
-        wobs = obs.T * np.tile(posteriors[:,c], (gmm._ndim, 1))
+        wobs = obs.T * posteriors[:,c]
         avg_obs2 = np.dot(wobs, obs) / posteriors[:,c].sum()
         mu = gmm._means[c][np.newaxis]
         cv[c] = (avg_obs2 - np.dot(mu, mu.T)

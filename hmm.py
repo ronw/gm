@@ -453,10 +453,9 @@ class _BaseHMM(GenerativeModel):
     @abc.abstractmethod
     def _init(self, obs, params, **kwargs):
         if 's' in params:
-            self.startprob = np.tile(1.0 / self._nstates, self._nstates)
+            self.startprob[:] = 1.0 / self._nstates
         if 't' in params:
-            shape = (self._nstates, self._nstates)
-            self.transmat = np.tile(1.0 / self._nstates, shape)
+            self.transmat[:] = 1.0 / self._nstates
 
 
 class GaussianHMM(_BaseHMM):
